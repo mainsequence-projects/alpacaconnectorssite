@@ -13,8 +13,10 @@ Production API requests are delegated by the Command Center SDK to FastAPI Resou
 No credential is included in the browser build.
 
 The same workflow owns the enabled **Alpaca Connectors** Command Center link for the deployment
-operator. Its custom image is read from `public/alpaca-navigation-logo.png` at the exact pushed
-commit, with `app-window` retained only as the fallback icon key.
+operator. Its repository-backed monochrome mask is read from
+`public/alpaca-navigation-logo.png` at the exact pushed commit through
+`navigation_link.icon_mask_path`, with `app-window` retained as the required loading and error
+fallback.
 
 Use the Command Center SDK sync command for releases so the npm version, commit, backend-owned
 tag, and Git push remain one atomic operation:

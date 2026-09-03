@@ -1,6 +1,6 @@
 ---
 name: code-repository-design
-description: Design, explain, review, and maintain a Main Sequence CodeRepository architecture and its connected CodeRepository Blueprint. Use for initial CodeRepository design, organization-environment architecture, architectural changes, ontology maintenance, Blueprint review or reconciliation, and implementation handoff across MetaTables, TimeIndexMetaTables, TimeIndexTableUpdaters, jobs, APIs, CLI commands, code-repository-to-agent skills, and static sites.
+description: Design, explain, review, and maintain a Main Sequence CodeRepository architecture and its connected CodeRepository Blueprint. Use for initial CodeRepository design, organization-environment architecture, architectural changes, ontology maintenance, Blueprint review or reconciliation, and implementation handoff across MetaTables, TimeIndexMetaTables, TimeIndexTableUpdaters, jobs, APIs, CLI commands, code-repository-to-agent skills, and static sites including repository-backed navigation-mask intent.
 ---
 
 # Main Sequence CodeRepository Design
@@ -163,7 +163,7 @@ Keep these distinctions:
   fixed SDK workload build are backend-owned. Never design an `extension_id`,
   image selector, build command, environment, active deployment, or a second
   publication-attempt system.
-- Workflow APIs `2.0.0` and `2.1.0` can carry non-secret target-owned `env_vars` for Jobs,
+- Workflow APIs `2.0.0`, `2.1.0`, and `2.2.0` can carry non-secret target-owned `env_vars` for Jobs,
   runtime ResourceReleases, and CodeRepository Coding Agents. Static sites use
   `build_environment`; widget extensions accept neither. These literals configure only the declared target or
   its backing Job: they do not create or resolve platform Secrets/Constants,
@@ -391,7 +391,7 @@ consumer.
 When a component requires process configuration, record the required variable
 names, non-secret value intent, target ownership, and secret exclusions in its
 existing constraints, decisions, dependencies, and acceptance criteria. The
-implementation handoff uses the live `code-repository-workflows` API `2.1.0` template.
+implementation handoff uses the live `code-repository-workflows` API `2.2.0` template.
 Do not add a second Blueprint environment-variable domain or represent a
 workflow literal as a platform Secret/Constant resource.
 
@@ -492,7 +492,7 @@ Direct manual Job creation selects one already-ready exact CodeRepository image.
 Direct automatic Job creation does not accept an image selector: the backend
 derives one exact initial image from the CodeRepositoryBranch's persisted synchronized
 commit and owns its preparation. Workflow Job declarations likewise carry no
-image or commit selectors: workflow API `2.1.0` derives the exact image from
+image or commit selectors: workflow API `2.2.0` derives the exact image from
 the immutable repository event. Neither automatic path resolves branch HEAD at
 runtime or persists an image-less Job.
 
@@ -651,7 +651,8 @@ Record:
 - observable acceptance criteria.
 
 When an accepted Static Site must appear in Command Center navigation, record
-the intended label, allowlisted icon, enabled state, and recipient category in
+the intended label, required allowlisted fallback icon key, optional
+repository-backed monochrome mask intent, enabled state, and recipient category in
 that Static Site's constraints and acceptance criteria. The implementation
 handoff uses the workflow's nested `navigation_link`; it does not add a
 top-level Blueprint links domain. Record that authenticated repository-action
@@ -664,6 +665,23 @@ identity evidence, not authorization persistence. Do not treat commit
 authorship, email, username, uncorrelated bot or deploy-key identity,
 coding-agent identity, or the automation identity as audience approval, and do
 not claim placement grants target access.
+
+When repository-backed mask intent is accepted, the implementation handoff
+uses workflow API `2.2.0` `navigation_link.icon_mask_path`; the Blueprint does
+not copy the path as a deployment field. The only supported asset is at most
+512 KiB and is either a sanitized basic-geometry SVG with a finite positive
+square `viewBox`, or a static square transparent PNG/WebP from 32 x 32 through
+512 x 512 pixels inclusive. Scripts, text, style, external references,
+embedded data, JPEG, animation, and opaque rasters are rejected. The path is a forward-slash,
+repository-root-relative POSIX path of at most 1024 UTF-8 bytes, contains no
+empty, `.`, `..`, `.git`, backslash, NUL, or symbolic-link component, and ends
+at a regular file in the exact event-commit checkout. Filename extensions and
+media types do not substitute for byte validation. Omission preserves the
+stored mask, explicit null removes it, identical sanitized bytes are a digest no-op,
+and `icon_key` remains the required fallback. Missing or invalid mask content
+warns without blocking Static Site deployment and preserves prior navigation
+state; unsafe path syntax is a blocking workflow validation error. A later
+valid push or redeployment re-resolves and restores the mask.
 
 Represent an API dependency through `depends_on`, using its `apis.<key>`
 reference. Do not invent a build-environment variable name in CodeRepository design;

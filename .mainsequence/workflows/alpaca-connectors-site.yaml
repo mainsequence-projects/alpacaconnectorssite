@@ -21,7 +21,7 @@ resources:
     navigation_link:
       label: Alpaca Connectors
       icon_key: app-window
-      icon_image_path: public/alpaca-navigation-logo.png
+      icon_mask_path: public/alpaca-navigation-logo.png
       is_enabled: true
       audiences:
         organization_wide: false

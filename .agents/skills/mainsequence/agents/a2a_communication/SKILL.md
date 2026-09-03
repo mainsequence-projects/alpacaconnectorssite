@@ -16,6 +16,14 @@ access, the calling host communicates directly with the target runtime under
 the standard A2A protocol and the runtime contract documented by
 `docs/agents/adr/adr-016-direct-runtime-a2a-communication.md`.
 
+When the host exposes a constrained A2A send capability such as
+`mainsequence__a2a_send_message`, use it for delivery. The host capability owns
+target-session allocation, runtime-access resolution, credential handling, and
+wire-envelope construction. Do not resolve a bearer token into model-visible
+arguments and do not replace that capability with shell, fetch, or generic HTTP
+tools. The explicit direct-runtime construction below is for trusted A2A-capable
+hosts that do not expose a constrained sender.
+
 ## Canonical Flow
 
 1. For a human or local caller, call `organization_environment.list`, present
@@ -29,11 +37,17 @@ the standard A2A protocol and the runtime contract documented by
 4. Create or reuse its session with `agent.get_or_create_session`.
 5. Resolve the session's current runtime endpoint and short-lived credential
    with `agent_session.resolve_runtime_access`.
-6. Send the message directly to that runtime using the returned access data.
+6. Inspect `runtime_interaction.can_submit`. Send the message directly to that
+   runtime only when it is `true`; otherwise stop and surface the backend-owned
+   notice without attempting to infer or execute remediation.
 7. Read the selected Agent's `a2a_profile`, choose an advertised response kind,
    and send the versioned response-kind extension header.
 8. Consume the returned `message` directly or follow the returned `task` using
    its documented lifecycle operations.
+
+For a constrained host sender, steps 4 through 8 are one host operation after
+candidate selection. Do not repeat its internal session or runtime-access
+operations manually.
 
 The `AgentSession.uid` is the durable conversation context. Runtime locations
 and credentials are ephemeral and must be resolved again when they expire or
@@ -135,15 +149,17 @@ The successful runtime-access result contains ephemeral sensitive data.
   credential in metrics or error details.
 - Never send it to a different runtime or agent.
 - Do not treat runtime access as authorization for any platform operation.
-- If access is expired, unavailable, or reports runtime drift, resolve it
-  through the platform again instead of guessing an endpoint or token.
+- If access is expired or unavailable, resolve it through the platform again
+  instead of guessing an endpoint or token.
 
-Treat `image_drift.has_drift` as the complete runtime-image truth even when a
-presentation redacts backend-owned checks. `image_drift.requires_user_action`
-is true only when at least one drifted check is not backend-autohealable. When
-drift is true but user action is false, let the canonical reconciliation path
-repair it and resolve access again; do not ask the user to rebuild or select an
-executor image.
+Treat `runtime_interaction.can_submit` as the sole new-message admission
+decision. `is_ready` is routing health and `image_drift` is diagnostic input;
+neither may override the interaction decision. When submission is blocked,
+use the returned notice and `retry_after_ms` to decide whether to resolve again.
+The MCP catalog intentionally has no runtime-remediation tool, so an Agent must
+not turn a returned UI action into an arbitrary deployment call. A human with
+deployment access performs explicit disruptive remediation through Command
+Center.
 
 The credential may be visible to the calling host because that host must make
 the direct runtime request. Keep it out of model-authored prose and reusable
@@ -170,10 +186,33 @@ another turn. Select `task` when durable recovery is required.
 
 For a normal request, select `message`. For durable asynchronous work, select
 `task` only when `supported_response_kinds` contains `task`. Send the explicit
-selection as:
+selection to the A2A v1 message endpoint returned in the atomic runtime-access
+bundle:
+
+```http
+POST {rpc_url}{runtime_paths.a2a}/message:send
+Authorization: Bearer {token}
+Content-Type: application/a2a+json
+Accept: application/a2a+json
+A2A-Extensions: https://mainsequence.ai/a2a/extensions/response-kind/v1
+```
+
+`runtime_paths.a2a` must be present for this standard flow. Treat it as an
+opaque backend-owned path. Never substitute `runtime_paths.chat`, a removed
+`/api/a2a/sessions/.../runtime/chat` path, or a guessed `/api/a2a/v1` value.
+
+The complete direct-Message request envelope is:
 
 ```json
 {
+  "message": {
+    "messageId": "<stable-message-id>",
+    "contextId": "<target-AgentSession.uid>",
+    "role": "ROLE_USER",
+    "parts": [
+      {"text": "<bounded request>"}
+    ]
+  },
   "configuration": {
     "responseKind": "message"
   }
@@ -191,10 +230,33 @@ Do not send the removed `returnImmediately` Boolean. Do not send
 `responseKind` on `message:stream`, because streaming already selects a
 different result contract.
 
+### Requester and responder direction
+
+Model message direction as `requester` and `responder`. A2A v1 unfortunately
+serializes those directions with the ProtoJSON enum names `ROLE_USER` and
+`ROLE_AGENT`:
+
+- requester -> `ROLE_USER` on the wire;
+- responder -> `ROLE_AGENT` on the wire.
+
+These values are transport direction, not principal identity. An Agent calling
+another Agent is the requester for that exchange and sends the A2A v1 wire value
+`ROLE_USER`; it remains authenticated and audited as an Agent through
+`caller_kind=agent`, the caller Agent and service UIDs, and the authorized
+parent-session UID. A human request uses the same requester wire direction but
+has `caller_kind=user`. Never infer, assert, or override caller identity from
+`message.role` or message metadata.
+
+Do not emit or require the removed v0.3 `kind` discriminator on v1 Message,
+Part, or Task objects. Lowercase `user` and `agent` are also obsolete on this
+wire boundary.
+
 ## Response Handling
 
 - For `message`, require a valid `message` result and consume only documented
-  response parts. An empty successful answer is a runtime contract failure.
+  response parts. The result must have the responder direction (`ROLE_AGENT`
+  on the v1 wire), and its `contextId` must equal the target AgentSession UID.
+  An empty successful answer is a runtime contract failure.
 - For `task`, require a valid `task` result, preserve its ID and context ID, and
   use task get/wait/cancel operations until a terminal state when the caller
   needs completion.
@@ -208,7 +270,7 @@ different result contract.
 - Report target-agent failures without exposing credentials or internal
   transport details.
 
-## Role Boundaries
+## Delegation Boundaries
 
 An orchestrating agent may discover candidates without confirmation. For a
 user-originated request, obtain user confirmation before sending real work to
