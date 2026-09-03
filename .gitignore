@@ -1,2 +1,6 @@
 node_modules/
 dist/
+documentation/.docusaurus/
+test-results/
+playwright-report/
+*.tsbuildinfo

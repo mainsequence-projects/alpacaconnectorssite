@@ -1,0 +1,30 @@
+api_version: 2.2.0
+name: alpaca-connectors-site
+resources:
+- key: alpaca-connectors-site
+  kind: resource_release
+  spec:
+    release_kind: static_site
+    name: Alpaca Connectors
+    root_directory: ''
+    framework: vite
+    node_version: '24'
+    output_directory: dist
+    routing_mode: spa
+    spa_entry_file: /index.html
+    build_environment:
+      VITE_FASTAPI_RESOURCE_RELEASE_UID: 0705a0b6-ec48-443b-835e-6c597a6b18f2
+    automatic_redeployment:
+      enabled: true
+      tag_regex: null
+    revision_retention_count: 3
+    navigation_link:
+      label: Alpaca Connectors
+      icon_key: app-window
+      icon_image_path: public/alpaca-navigation-logo.png
+      is_enabled: true
+      audiences:
+        organization_wide: false
+        team_uids: []
+        user_uids:
+        - e2a4f38a-1b5f-40a3-974f-70bc8f065b3f

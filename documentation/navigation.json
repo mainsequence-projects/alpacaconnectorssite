@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "sidebarId": "documentationSidebar",
+  "sections": [
+    {
+      "label": "Application surfaces",
+      "doc": "surfaces/index",
+      "items": [
+        {
+          "label": "Project capabilities",
+          "doc": "surfaces/project-capabilities",
+          "items": []
+        },
+        {
+          "label": "Assets",
+          "doc": "surfaces/assets",
+          "items": []
+        },
+        {
+          "label": "Accounts",
+          "doc": "surfaces/accounts",
+          "items": []
+        },
+        {
+          "label": "Universes",
+          "doc": "surfaces/universes",
+          "items": []
+        },
+        {
+          "label": "Bars",
+          "doc": "surfaces/bars",
+          "items": []
+        }
+      ]
+    },
+    {
+      "label": "Technical documentation",
+      "doc": "technical/index",
+      "items": [
+        {
+          "label": "Frontend implementation plan",
+          "doc": "technical/frontend-implementation-plan",
+          "items": []
+        },
+        {
+          "label": "Architecture",
+          "doc": "technical/architecture",
+          "items": []
+        },
+        {
+          "label": "Testing and verification",
+          "doc": "technical/testing",
+          "items": []
+        },
+        {
+          "label": "Deployment",
+          "doc": "technical/deployment",
+          "items": []
+        }
+      ]
+    }
+  ]
+}

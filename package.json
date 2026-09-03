@@ -1,24 +1,43 @@
 {
   "name": "alpacaconnectorssite",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "build": "npm run build:app && npm run build:docs",
+    "build:e2e": "vite build --mode e2e && npm run build:docs",
+    "preview": "vite preview",
+    "build:app": "tsc -b && vite build",
+    "theme:audit": "command-center-sdk theme audit --path src",
+    "check": "npm run theme:audit && npm run docs:check && tsc -b",
+    "test:e2e": "npm run build:e2e && playwright test",
+    "docs:sync": "node scripts/sync-docs-navigation.mjs",
+    "docs:check": "node scripts/check-docs-toolchain.mjs && npm run docs:sync -- --check && node scripts/validate-docs.mjs",
+    "docs:dev": "npm run docs:sync && docusaurus start documentation --host 127.0.0.1 --port 3011 --no-open",
+    "build:docs": "npm run docs:sync && docusaurus build documentation --out-dir ../dist/docs"
   },
   "dependencies": {
     "@dev-mainsequence/command-center-sdk": "latest",
+    "lucide-react": "^0.500.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
   "devDependencies": {
+    "@docusaurus/core": "3.10.2",
+    "@docusaurus/preset-classic": "3.10.2",
+    "@mdx-js/react": "3.1.1",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^24.0.0",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^6.1.0",
+    "prism-react-renderer": "2.4.1",
     "typescript": "^5.9.2",
     "vite": "^8.1.5"
-  }
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "displayName": "Alpaca Connectors"
 }
