@@ -20,7 +20,7 @@ resources:
     revision_retention_count: 3
     navigation_link:
       label: Alpaca Connectors
-      icon_key: app-window
+      icon_key: line-chart
       icon_mask_path: public/alpaca-navigation-logo.png
       is_enabled: true
       audiences:
