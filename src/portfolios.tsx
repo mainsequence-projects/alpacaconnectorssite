@@ -674,9 +674,41 @@ export function PortfoliosPage({ transport }: { transport: ApiTransport }) {
                   <label className="field">Valuation column<input value={valuationColumn} onChange={(event) => setValuationColumn(event.target.value)} disabled={busy} /></label>
                   <label className="field">Commission fee<input type="number" min={0} step="0.00001" value={commissionFee} onChange={(event) => setCommissionFee(Number(event.target.value))} disabled={busy} /></label>
                 </div>
-                <label className="checkbox-field"><input type="checkbox" checked={forwardFillToNow} onChange={(event) => setForwardFillToNow(event.target.checked)} disabled={busy} />Forward-fill valuation prices to now</label>
-                <label className="checkbox-field"><input type="checkbox" checked={failOnMissingPrices} onChange={(event) => setFailOnMissingPrices(event.target.checked)} disabled={busy} />Fail when required prices are missing</label>
-                <div className="workflow-guidance"><Info aria-hidden="true" size={18} /><p>Phase 1 uses persistent daily <strong>InterpolatedPrices</strong> with forward-fill interpolation and <strong>ImmediateSignal</strong>. These are executable constraints, not claims that ms-markets supports no other strategy. Signal timestamps record observation time and do not guarantee exact economic effective time.</p></div>
+                <fieldset className="policy-fieldset">
+                  <legend>Price availability policies</legend>
+                  <div className="policy-option-grid">
+                    <label className="policy-option">
+                      <input
+                        type="checkbox"
+                        checked={forwardFillToNow}
+                        onChange={(event) => setForwardFillToNow(event.target.checked)}
+                        disabled={busy}
+                        aria-labelledby="portfolio-forward-fill-label"
+                        aria-describedby="portfolio-forward-fill-help"
+                      />
+                      <span className="policy-option__copy">
+                        <strong id="portfolio-forward-fill-label">Extend latest valuation prices to now</strong>
+                        <small id="portfolio-forward-fill-help">Extend the portfolio calculation index to the current UTC time and reuse each asset&apos;s latest known valuation. This is calculation-only alignment; it does not write synthetic <strong>InterpolatedPrices</strong> rows or extend signal validity.</small>
+                      </span>
+                    </label>
+                    <label className="policy-option">
+                      <input
+                        type="checkbox"
+                        checked={failOnMissingPrices}
+                        onChange={(event) => setFailOnMissingPrices(event.target.checked)}
+                        disabled={busy}
+                        aria-labelledby="portfolio-missing-prices-label"
+                        aria-describedby="portfolio-missing-prices-help"
+                      />
+                      <span className="policy-option__copy">
+                        <strong id="portfolio-missing-prices-label">Stop when a required asset has no price</strong>
+                        <small id="portfolio-missing-prices-help">Fail the run when an asset required by the signal has no usable valuation observation. Leave this off to log missing coverage and continue only when the rebalance can still produce a usable portfolio frame.</small>
+                      </span>
+                    </label>
+                  </div>
+                  <p className="policy-fieldset__note"><strong>Independent policies:</strong> forward-fill handles dates after an asset has a known price; strict missing-price validation catches assets with no usable price. You may enable either or both.</p>
+                </fieldset>
+                <div className="workflow-guidance"><Info aria-hidden="true" size={18} /><p>Phase 1 uses a persistent daily <strong>InterpolatedPrices</strong> dependency with forward-fill interpolation for source-bar gaps, then applies observed weights through <strong>ImmediateSignal</strong>. Signal timestamps record observation time and do not guarantee exact economic effective time.</p></div>
               </section>
 
               <section className="workflow-form-section">

@@ -402,6 +402,10 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
   await expect(page.getByRole("heading", { name: "Create portfolio" })).toBeVisible();
   await expect(form.getByLabel("Environment")).toHaveCount(0);
   await expect(form.getByText("persistent daily InterpolatedPrices", { exact: false })).toBeVisible();
+  await expect(form.getByRole("checkbox", { name: "Extend latest valuation prices to now" })).toBeVisible();
+  await expect(form.getByText("does not write synthetic InterpolatedPrices rows", { exact: false })).toBeVisible();
+  await expect(form.getByRole("checkbox", { name: "Stop when a required asset has no price" })).toBeVisible();
+  await expect(form.getByText("Independent policies:", { exact: false })).toBeVisible();
   await form.getByLabel("Portfolio name").fill("Daily observed IVV portfolio");
   await form.getByRole("button", { name: "ETF weight Signal" }).click();
   await page.getByRole("option", { name: /Daily IVV observation/ }).click();

@@ -27,6 +27,22 @@ runtime, spot preference, image, and automatic deployment. A JobRun contains exe
 only. The create and edit forms present these values together, but submit Job fields under the
 nested `job` object so the backend writes every field to its authoritative owner.
 
+## Price availability policies
+
+The two price options are independent checkboxes because they control complementary behavior:
+
+- **Extend latest valuation prices to now** extends the portfolio calculation index to the current
+  UTC time and forward-fills each Asset from its latest known valuation. This is calculation-only
+  alignment; it does not write synthetic rows into persistent `InterpolatedPrices` storage and
+  does not extend signal validity.
+- **Stop when a required asset has no price** makes the run fail when an Asset required by the
+  signal has no usable valuation observation. When disabled, the calculation logs the missing
+  coverage and continues only if it can still produce a usable portfolio frame.
+
+Enable either option independently or enable both. Forward-fill can cover later dates only after
+an Asset has a known price; it cannot manufacture the first usable observation. Strict
+missing-price validation therefore remains meaningful when forward-fill is enabled.
+
 ## Rebalance scope
 
 Select **Rebalance configurations** to create, edit, or delete reusable policies. Phase 1 supports
