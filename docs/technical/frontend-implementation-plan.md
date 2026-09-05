@@ -3,7 +3,7 @@
 ## Outcome
 
 Build an embedded Command Center application for the Alpaca Connectors FastAPI service. The site
-must expose its selected asset, account, universe, and bars-configuration workflows, using
+must expose its selected asset, account, universe, bars-configuration, and signal-Job workflows, using
 the installed Command Center SDK for embedding, theme, layout, application feedback, resource
 discovery, and action confirmation.
 
@@ -14,14 +14,15 @@ discovery, and action confirmation.
 - Package-owned Command Center skills and authenticated platform skills were synchronized before
   implementation.
 - The backend API tests for the current capability routes pass.
-- The asset-registration operation, materialized-universe create/run, and stored bars-configuration
+- The asset-registration operation, relational Asset Universe create/run, and stored bars-configuration
   contracts are the workflows selected for this frontend.
 - Other project capabilities are documented but are not presented as application pages.
 
 ## Architecture decision
 
 Application purpose:
-: Provide one browser control surface for the selected asset, account, universe, and bars-configuration workflows.
+: Provide one browser control surface for the selected asset, account, universe,
+  bars-configuration, and signal-Job workflows.
 
 Main Command Center embedding:
 : Use `createStaticSiteIframeClient` on the `mainsequence.alpaca-connectors` channel. Deployed API
@@ -37,11 +38,11 @@ Application documentation:
 : Ship user and technical documentation at `/docs/` in the same `dist/` artifact.
 
 Application-owned routes:
-: Assets, Accounts, Universes, and Bars. The root resolves to Assets. Project-wide capability and configuration
+: Assets, Accounts, Universes, Bars, Signals, and ETF Portfolios. The root resolves to Assets. Project-wide capability and configuration
   reference belongs in the same-artifact documentation, not in an Overview application route.
 
 Resource collections and details:
-: The Accounts, Universes, and Bars routes embed SDK `ResourceListPage` collections backed by their canonical
+: The Accounts, Universes, Bars, Signals, and ETF Portfolios routes embed SDK `ResourceListPage` collections backed by their canonical
   list and discovery endpoints. Other future resource pages must use their authoritative collection,
   pagination, discovery, and detail contracts. Do not manufacture adapters from capability
   summaries.
@@ -60,7 +61,8 @@ Backend adapters and contracts:
   direct unauthenticated local fetch only during Vite development. Typed response guards keep
   malformed responses out of the UI. The Accounts route loads Secret names through a metadata-only
   endpoint and never accepts values. The Universes route accepts an explicit source URL when the
-  universe is created and does not load provider configuration or infer a provider.
+  universe is created and does not load provider configuration or infer a provider. Its types keep
+  Universe UID, Source UID, and Asset Category UID distinct.
 
 Selected focused skills:
 : Use Command Center SDK, build Command Center application, integrate static-site iframe, theme
@@ -89,7 +91,7 @@ owned by the root npm toolchain.
 2. Add a development-only direct transport for the local FastAPI server.
 3. Map transport startup and failures to SDK application feedback.
 4. Add one SDK-owned internal navigation panel headed by the Alpaca Connectors logo and label.
-   Keep Assets, Accounts, Universes, Bars, and Documentation directly in that panel. The embedded
+   Keep Assets, Accounts, Universes, Bars, Signals, ETF Portfolios, and Documentation directly in that panel. The embedded
    child must not reproduce the host Command Center's application rail or application selector.
 
 Exit gate: the app never handles a host session token, all deployed API paths are relative, direct
@@ -98,8 +100,8 @@ production links fail safely without an iframe bridge, and host theme updates re
 ### Phase 3 — implemented API workflows
 
 1. Load provider configuration for the workflow forms without rendering a project-state dashboard.
-2. Add exact-symbol and ETF-seed asset-registration planning and execution, including an inline
-   explanation of expansion, validation, execution, and the separate universe step.
+2. Add exact-symbol asset-registration planning and execution, including required
+   registered-account selection and an inline explanation of validation and execution.
 3. Start asset registration through the persisted operation endpoint, poll its stable UID, and map
    all recorded backend steps to the SDK progress list without inventing percentages.
 4. Add explicit universe creation that persists an empty universe plus its holdings source without
@@ -113,7 +115,7 @@ visibly distinct from execution.
 
 ### Phase 4 — documentation and verification
 
-1. Document the four application surfaces, the project-wide capability reference, transport/security
+1. Document the five application surfaces, the project-wide capability reference, transport/security
    boundary, configuration, and future resource expansion.
 2. Run documentation checks, TypeScript/Vite build, SDK theme audit, and browser layout checks.
 3. Exercise the production artifact at `/`, `/docs/`, and a nested documentation route.
@@ -149,12 +151,30 @@ snapshot as a side effect.
 1. Adapt `/v1/accounts` and `/v1/accounts/discovery` with the SDK HTTP resource adapter.
 2. Populate searchable Secret pickers from `/v1/accounts/secret-references`, whose payload contains
    names only and never Secret values.
-3. Create paper or live account registrations, optionally capturing initial holdings.
+3. Create paper or live account registrations; registration always registers missing held assets
+   and creates the initial holdings snapshot in the same flow.
 4. Edit account names, Secret bindings, and active state while keeping the environment immutable.
 5. Delete through an SDK confirmation dialog and explain that historical holdings remain stored.
 
 Exit gate: browser coverage proves create, update, and delete using selected Secret names; no raw
 credential field exists in the frontend contract, fixture, or rendered form.
+
+### Phase 8 — Universe-backed signal Jobs
+
+1. Adapt `/v1/signal-jobs` and its discovery contract with the SDK HTTP resource adapter.
+2. Keep the default view as the signal list and open the create/edit form only after an explicit
+   user action.
+3. Select an active Universe, an active registered Alpaca account, schedule, and compute settings.
+   Environment resolution stays internal to the API and current CodeRepositoryBranch.
+4. Expose run, edit, and delete as row actions. Keep schedule enablement in the edit form and keep
+   internal reconciliation out of the user-facing application. Explain that deletion retains prior
+   signal observations.
+5. State clearly that `universe_uid` defines signal identity, `account_uid` is runtime-only, and an
+   observation timestamp is not guaranteed to be the economic effective time of the ETF weights.
+
+Exit gate: browser coverage proves create, read, update, run, schedule disablement through edit, and
+delete; it also proves that internal pause, resume, and reconcile controls are absent and that the
+discovery column IDs exactly match every local renderer.
 
 ## Runtime configuration
 
@@ -170,7 +190,7 @@ credential.
 | Concern | Proof |
 | --- | --- |
 | SDK guidance | SDK status is current and both skill sentinels record successful synchronization |
-| API fidelity | Frontend endpoint constants match the current FastAPI routers; browser tests cover asset-registration polling, account CRUD, universe creation and lifecycle, and bars-configuration CRUD; backend API tests pass |
+| API fidelity | Frontend endpoint constants match the current FastAPI routers; browser tests cover asset-registration polling, account CRUD, universe creation and lifecycle, bars-configuration CRUD, and signal Job lifecycle; backend API tests pass |
 | Embed security | SDK client owns credential acquisition; only relative deployed paths are accepted |
 | Theme | SDK theme audit passes and host theme updates reach rendered controls and surfaces |
 | Layout | SDK browser geometry verifier passes at 375, 768, and 1280 pixel widths |
@@ -185,13 +205,15 @@ See [Deployment](deployment.md) for the release contract and verification bounda
 
 ## Implementation result
 
-Phases 1 through 7 are complete in this repository. The SDK remained current at `0.1.18`; package
+Phases 1 through 8 are complete in this repository. The SDK remained current at `0.1.18`; package
 and authenticated platform skills were synchronized; the application and same-artifact
 documentation were built; and automated checks covered theme conformance, TypeScript,
 documentation, responsive layout, direct development requests, delegated iframe requests, plan
 gating, account CRUD by Secret reference, registered-universe resource management,
-bars-configuration CRUD, host theme updates, and production documentation routes.
+bars-configuration CRUD, signal Job CRUD and lifecycle, durable ETF Portfolio and Rebalance
+Configuration CRUD, portfolio Job execution, host theme updates, and production
+documentation routes.
 
-Holdings snapshots, market-data datasets and observations, portfolios, and other SDK resource views are
+Holdings snapshots, market-data datasets and observations, portfolio output observations, and other SDK resource views are
 not current site pages and require an explicit frontend scope plus verification against their
 authoritative contracts.

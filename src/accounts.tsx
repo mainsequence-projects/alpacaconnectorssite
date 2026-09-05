@@ -12,7 +12,9 @@ import {
   type ResourceHttpRequest,
 } from "@dev-mainsequence/command-center-sdk/resource";
 import {
+  EntitySummary,
   ResourceActionConfirmationDialog,
+  ResourceDetailShell,
   ResourceIconLabelCell,
   ResourceListPage,
   ResourcePicker,
@@ -20,13 +22,14 @@ import {
   type ResourcePickerOption,
   type ResourceRowAction,
 } from "@dev-mainsequence/command-center-sdk/views";
-import { Landmark, ShieldCheck } from "lucide-react";
+import { Landmark, ShieldCheck, WalletCards } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   API_ENDPOINTS,
   createApiClient,
   type Account,
+  type AccountHolding,
   type AccountRegistrationRequest,
   type AccountUpdateRequest,
   type ApiTransport,
@@ -73,6 +76,27 @@ function formatSnapshotTime(value: string | null): string {
   if (!value) return "Never";
   const timestamp = new Date(value);
   return Number.isNaN(timestamp.valueOf()) ? value : timestamp.toLocaleString();
+}
+
+function formatHoldingQuantity(value: number | null): string {
+  if (value === null) return "—";
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 8 }).format(value);
+}
+
+function formatAccountValue(value: string | number | null, currency: string | null): string {
+  if (value === null || value === "") return "—";
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return String(value);
+  if (!currency) return new Intl.NumberFormat().format(numericValue);
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 2,
+    }).format(numericValue);
+  } catch {
+    return `${new Intl.NumberFormat().format(numericValue)} ${currency}`;
+  }
 }
 
 function buildAccountResource(transport: ApiTransport) {
@@ -158,18 +182,111 @@ function buildAccountResource(transport: ApiTransport) {
   });
 }
 
+function buildAccountHoldingsResource(transport: ApiTransport, accountUid: string) {
+  const holdingsPath = `${API_ENDPOINTS.accounts}/${encodeURIComponent(accountUid)}/holdings`;
+  const latestHoldingsPath = `${holdingsPath}/latest`;
+  const adapter = createHttpResourceAdapter<AccountHolding, string, ResourceCollection<AccountHolding>>({
+    client: createResourceHttpClient(transport),
+    endpoints: {
+      list: latestHoldingsPath,
+      discovery: `${latestHoldingsPath}/discovery`,
+    },
+    serializeListQuery: ({ pageIndex, pageSize, sort }) => ({
+      limit: pageSize,
+      offset: pageIndex * pageSize,
+      ordering: sort?.[0]
+        ? `${sort[0].direction === "descending" ? "-" : ""}${sort[0].key}`
+        : "asset_identifier",
+    }),
+    normalizeList: (response) => ({
+      items: response.items,
+      pageInfo: response.pageInfo,
+    }),
+  });
+
+  return defineResourceApplication({
+    id: "alpaca-account-latest-holdings",
+    label: "Latest holdings",
+    itemLabel: "holding",
+    description: "Positions from this account's newest immutable holdings snapshot.",
+    getId: (holding: AccountHolding) => JSON.stringify([
+      holding.time_index,
+      holding.account_uid,
+      holding.asset_identifier,
+    ]),
+    adapter,
+    columns: [
+      {
+        id: "time-index",
+        header: "Snapshot time",
+        getValue: (holding) => holding.time_index,
+        sortableKey: "time_index",
+        renderCell: (holding) => formatSnapshotTime(holding.time_index),
+      },
+      {
+        id: "asset-identifier",
+        header: "Asset",
+        getValue: (holding) => holding.asset_identifier,
+        sortableKey: "asset_identifier",
+        renderCell: (holding) => (
+          <ResourceIconLabelCell
+            icon={<WalletCards size={17} />}
+            label={holding.extra_details?.symbol || holding.asset_identifier}
+            meta={holding.extra_details?.symbol ? holding.asset_identifier : undefined}
+          />
+        ),
+      },
+      {
+        id: "quantity",
+        header: "Quantity",
+        getValue: (holding) => holding.quantity,
+        renderCell: (holding) => formatHoldingQuantity(holding.quantity),
+      },
+      {
+        id: "direction",
+        header: "Side",
+        getValue: (holding) => holding.direction,
+        renderCell: (holding) => (
+          <ResourceStatusCell
+            label={holding.direction === -1 ? "Short" : "Long"}
+            tone={holding.direction === -1 ? "warning" : "success"}
+          />
+        ),
+      },
+      {
+        id: "holdings-set-uid",
+        header: "Snapshot UID",
+        getValue: (holding) => holding.holdings_set_uid,
+      },
+    ],
+  });
+}
+
 function AccountList({
   transport,
   refreshKey,
+  formOpen,
+  onRegister,
   onEdit,
   onDelete,
+  onActivate,
 }: {
   transport: ApiTransport;
   refreshKey: number;
+  formOpen: boolean;
+  onRegister: () => void;
   onEdit: (account: Account) => void;
   onDelete: (account: Account) => void;
+  onActivate: (account: Account) => void;
 }) {
   const definition = useMemo(() => buildAccountResource(transport), [transport]);
+  const primaryActions = useMemo(() => [{
+    id: "register-account",
+    label: "Register account",
+    tone: "primary" as const,
+    disabled: formOpen,
+    onSelect: onRegister,
+  }], [formOpen, onRegister]);
   const rowActions = useMemo<readonly ResourceRowAction<Account>[]>(() => [
     { id: "edit-account", label: "Edit", onSelect: onEdit },
     { id: "delete-account", label: "Delete", tone: "danger", onSelect: onDelete },
@@ -180,11 +297,94 @@ function AccountList({
       definition={definition}
       embedded
       pageSize={25}
+      primaryActions={primaryActions}
+      onRowActivate={onActivate}
       refreshable
       refreshKey={refreshKey}
       rowActions={rowActions}
       searchPlaceholder="Search Alpaca accounts"
     />
+  );
+}
+
+function AccountHoldingsDetail({
+  account,
+  transport,
+  onBack,
+}: {
+  account: Account;
+  transport: ApiTransport;
+  onBack: () => void;
+}) {
+  const holdingsDefinition = useMemo(
+    () => buildAccountHoldingsResource(transport, account.uid),
+    [account.uid, transport],
+  );
+
+  return (
+    <ResourceDetailShell<Account>
+      embedded
+      breadcrumbs={[
+        { id: "accounts", label: "Accounts", onSelect: onBack },
+        { id: account.uid, label: account.account_name },
+      ]}
+      headerActions={(
+        <button className="button button--secondary" type="button" onClick={onBack}>
+          Back to accounts
+        </button>
+      )}
+      summary={(
+        <EntitySummary
+          summary={{
+            entity: {
+              id: account.uid,
+              type: "Alpaca account",
+              title: account.account_name,
+            },
+            badges: [
+              {
+                key: "environment",
+                label: account.is_paper ? "Paper" : "Live",
+                tone: account.is_paper ? "default" : "warning",
+              },
+              {
+                key: "status",
+                label: account.account_is_active ? "Active" : "Inactive",
+                tone: account.account_is_active ? "success" : "default",
+              },
+            ],
+            inline_fields: [
+              { key: "identifier", label: "Identifier", value: account.unique_identifier },
+              { key: "last-refresh", label: "Last refresh", value: formatSnapshotTime(account.snapshot_time) },
+            ],
+            highlight_fields: [],
+            stats: [
+              {
+                key: "equity",
+                label: "Equity",
+                value: account.equity,
+                display: formatAccountValue(account.equity, account.currency),
+              },
+              {
+                key: "cash",
+                label: "Cash",
+                value: account.cash,
+                display: formatAccountValue(account.cash, account.currency),
+              },
+            ],
+          }}
+        />
+      )}
+    >
+      <ResourceListPage
+        definition={holdingsDefinition}
+        embedded
+        emptyContent="This account has no stored holdings snapshot."
+        pageSize={25}
+        refreshable
+        searchable={false}
+      />
+    </ResourceDetailShell>
   );
 }
 
@@ -208,40 +408,57 @@ function secretPickerOptions(
 export function AccountsPage({ transport }: { transport: ApiTransport }) {
   const api = useMemo(() => createApiClient(transport), [transport]);
   const [secretReferences, setSecretReferences] = useState<SecretReference[]>([]);
-  const [secretsLoading, setSecretsLoading] = useState(true);
+  const [secretsLoading, setSecretsLoading] = useState(false);
   const [secretsError, setSecretsError] = useState<string | null>(null);
+  const [secretSearch, setSecretSearch] = useState("");
+  const [secretLookupRevision, setSecretLookupRevision] = useState(0);
+  const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Account | null>(null);
   const [accountName, setAccountName] = useState("");
   const [environment, setEnvironment] = useState<"paper" | "live">("paper");
   const [apiKeySecretName, setApiKeySecretName] = useState("");
   const [secretKeySecretName, setSecretKeySecretName] = useState("");
   const [accountIsActive, setAccountIsActive] = useState(true);
-  const [captureInitialHoldings, setCaptureInitialHoldings] = useState(false);
-  const [registerMissingAssets, setRegisterMissingAssets] = useState(true);
   const [mutation, setMutation] = useState<MutationState>({ state: "idle" });
   const [refreshKey, setRefreshKey] = useState(0);
+  const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deletePending, setDeletePending] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!formOpen) return;
     const controller = new AbortController();
+    const search = secretSearch.trim();
     setSecretsLoading(true);
     setSecretsError(null);
-    api.get<ResourceCollection<SecretReference>>(
-      `${API_ENDPOINTS.accountSecretReferences}?limit=100&offset=0`,
-      controller.signal,
-    )
-      .then((response) => setSecretReferences(response.items))
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) setSecretsError(formatError(error));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setSecretsLoading(false);
-      });
-    return () => controller.abort();
-  }, [api]);
+    const timer = window.setTimeout(() => {
+      api.get<ResourceCollection<SecretReference>>(
+        withQuery(API_ENDPOINTS.accountSecretReferences, {
+          limit: 100,
+          offset: 0,
+          search,
+        }),
+        controller.signal,
+      )
+        .then((response) => setSecretReferences(response.items))
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted) setSecretsError(formatError(error));
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setSecretsLoading(false);
+        });
+    }, search ? 150 : 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [api, formOpen, secretLookupRevision, secretSearch]);
+
+  const refreshSecretLookup = () => {
+    setSecretLookupRevision((current) => current + 1);
+  };
 
   const apiKeyOptions = useMemo(
     () => secretPickerOptions(secretReferences, apiKeySecretName),
@@ -267,19 +484,38 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
     setApiKeySecretName("");
     setSecretKeySecretName("");
     setAccountIsActive(true);
-    setCaptureInitialHoldings(false);
-    setRegisterMissingAssets(true);
+    setSecretSearch("");
+    setSecretsError(null);
+  }
+
+  function beginRegistration() {
+    setSelectedAccount(null);
+    resetForm();
+    setSecretsLoading(true);
+    setFormOpen(true);
+    setMutation({ state: "idle" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function closeForm() {
+    resetForm();
+    setFormOpen(false);
+    setSecretsLoading(false);
+    setMutation({ state: "idle" });
   }
 
   function beginEdit(account: Account) {
+    setSelectedAccount(null);
+    setSecretSearch("");
+    setSecretsLoading(true);
+    setSecretLookupRevision((current) => current + 1);
+    setFormOpen(true);
     setEditing(account);
     setAccountName(account.account_name);
     setEnvironment(account.is_paper ? "paper" : "live");
     setApiKeySecretName(account.api_key_secret_name);
     setSecretKeySecretName(account.secret_key_secret_name);
     setAccountIsActive(account.account_is_active);
-    setCaptureInitialHoldings(false);
-    setRegisterMissingAssets(true);
     setMutation({ state: "idle" });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -315,8 +551,6 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
           environment,
           api_key_secret_name: apiKeySecretName,
           secret_key_secret_name: secretKeySecretName,
-          capture_initial_holdings: captureInitialHoldings,
-          register_missing_assets: registerMissingAssets,
         };
         await api.post<Account>(API_ENDPOINTS.accounts, request);
       }
@@ -324,6 +558,8 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
       const completedName = accountName.trim();
       const completedAction = editing ? "Updated" : "Registered";
       resetForm();
+      setFormOpen(false);
+      setSecretsLoading(false);
       setMutation({ state: "success", message: `${completedAction} ${completedName}.` });
       setRefreshKey((current) => current + 1);
     } catch (error) {
@@ -346,7 +582,12 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
         `${API_ENDPOINTS.accounts}/${encodeURIComponent(deleteTarget.uid)}`,
       );
       const deletedName = deleteTarget.account_name;
-      if (editing?.uid === deleteTarget.uid) resetForm();
+      if (editing?.uid === deleteTarget.uid) {
+        resetForm();
+        setFormOpen(false);
+        setSecretsLoading(false);
+      }
+      if (selectedAccount?.uid === deleteTarget.uid) setSelectedAccount(null);
       setDeleteTarget(null);
       setDeleteConfirmation("");
       setMutation({ state: "success", message: `Removed ${deletedName}.` });
@@ -367,8 +608,9 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
           description="Register and maintain brokerage accounts by selecting the Main Sequence Secrets that hold their Alpaca credentials."
         />
 
-        <ApplicationCard header={<h2>{editing ? "Edit account registration" : "Register account"}</h2>}>
-          <form className="workflow-form" onSubmit={submit}>
+        {formOpen ? (
+          <ApplicationCard header={<h2>{editing ? "Edit account registration" : "Register account"}</h2>}>
+            <form className="workflow-form" onSubmit={submit}>
             <div className="form-grid">
               <label className="field">Account name
                 <input
@@ -394,14 +636,21 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
                 <ResourcePicker
                   ariaLabelledBy="api-key-secret-label"
                   disabled={busy || secretsError !== null}
-                  emptyMessage="No visible Main Sequence Secrets."
+                  emptyMessage={secretSearch.trim()
+                    ? "No visible Main Sequence Secrets match this name."
+                    : "No visible Main Sequence Secrets."}
                   fullWidth
                   loading={secretsLoading}
                   mode="single"
+                  onOpenChange={(open) => {
+                    if (open) refreshSecretLookup();
+                  }}
+                  onSearchValueChange={setSecretSearch}
                   options={apiKeyOptions}
                   placeholder="Select the Secret containing the API key"
                   searchable
                   searchPlaceholder="Search Secret names"
+                  searchValue={secretSearch}
                   value={apiKeySecretName || null}
                   onValueChange={setApiKeySecretName}
                 />
@@ -411,14 +660,21 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
                 <ResourcePicker
                   ariaLabelledBy="secret-key-secret-label"
                   disabled={busy || secretsError !== null}
-                  emptyMessage="No visible Main Sequence Secrets."
+                  emptyMessage={secretSearch.trim()
+                    ? "No visible Main Sequence Secrets match this name."
+                    : "No visible Main Sequence Secrets."}
                   fullWidth
                   loading={secretsLoading}
                   mode="single"
+                  onOpenChange={(open) => {
+                    if (open) refreshSecretLookup();
+                  }}
+                  onSearchValueChange={setSecretSearch}
                   options={secretKeyOptions}
                   placeholder="Select the Secret containing the secret key"
                   searchable
                   searchPlaceholder="Search Secret names"
+                  searchValue={secretSearch}
                   value={secretKeySecretName || null}
                   onValueChange={setSecretKeySecretName}
                 />
@@ -436,48 +692,37 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
                 Active
               </label>
             ) : (
-              <>
-                <label className="checkbox-field">
-                  <input
-                    type="checkbox"
-                    checked={captureInitialHoldings}
-                    onChange={(event) => setCaptureInitialHoldings(event.target.checked)}
-                    disabled={busy}
-                  />
-                  Capture an initial holdings snapshot after registration
-                </label>
-                {captureInitialHoldings ? (
-                  <label className="checkbox-field">
-                    <input
-                      type="checkbox"
-                      checked={registerMissingAssets}
-                      onChange={(event) => setRegisterMissingAssets(event.target.checked)}
-                      disabled={busy}
-                    />
-                    Register strictly resolved missing held assets
-                  </label>
-                ) : null}
-              </>
+              <p className="form-note" role="note">
+                Registration resolves every non-zero holding, registers missing assets from their
+                immutable Alpaca UUIDs, and creates the initial holdings snapshot in the same flow.
+                OpenFIGI metadata is optional. An identity conflict names the affected asset and
+                writes no partial Account or snapshot.
+              </p>
             )}
 
-            {secretsError ? <p className="form-error" role="alert">Secret references could not be loaded: {secretsError}</p> : null}
-            {!secretsLoading && !secretsError && secretReferences.length === 0 ? (
+            {secretsError ? (
+              <div className="inline-feedback" role="alert">
+                <p className="form-error">Secret references could not be loaded: {secretsError}</p>
+                <button className="button button--secondary" type="button" onClick={refreshSecretLookup}>
+                  Retry Secret lookup
+                </button>
+              </div>
+            ) : null}
+            {!secretsLoading && !secretsError && !secretSearch.trim() && secretReferences.length === 0 ? (
               <p className="form-error" role="alert">Create and share the Alpaca credential Secrets in Main Sequence before registering an account.</p>
             ) : null}
             {apiKeySecretName && apiKeySecretName === secretKeySecretName ? (
               <p className="form-error" role="alert">The API key and secret key must reference different Secrets.</p>
             ) : null}
 
-            <div className="form-actions">
-              <button className="button button--primary" type="submit" disabled={!canSubmit}>
-                {editing ? "Save changes" : "Register account"}
-              </button>
-              {editing ? (
-                <button className="button button--secondary" type="button" onClick={resetForm} disabled={busy}>
-                  Cancel edit
+              <div className="form-actions">
+                <button className="button button--primary" type="submit" disabled={!canSubmit}>
+                  {editing ? "Save changes" : "Register account"}
                 </button>
-              ) : null}
-            </div>
+                <button className="button button--secondary" type="button" onClick={closeForm} disabled={busy}>
+                  {editing ? "Cancel edit" : "Cancel"}
+                </button>
+              </div>
 
             <div className="workflow-guidance">
               <ShieldCheck aria-hidden="true" size={18} />
@@ -485,8 +730,9 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
                 This application stores only the selected Secret names. Credential values remain in Main Sequence and are resolved by the backend only when Alpaca access is required.
               </p>
             </div>
-          </form>
-        </ApplicationCard>
+            </form>
+          </ApplicationCard>
+        ) : null}
 
         {mutation.state === "loading" ? (
           <ApplicationStatusScreen
@@ -513,12 +759,23 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
           </section>
         ) : null}
 
-        <AccountList
-          transport={transport}
-          refreshKey={refreshKey}
-          onEdit={beginEdit}
-          onDelete={requestDelete}
-        />
+        {selectedAccount ? (
+          <AccountHoldingsDetail
+            account={selectedAccount}
+            transport={transport}
+            onBack={() => setSelectedAccount(null)}
+          />
+        ) : (
+          <AccountList
+            transport={transport}
+            refreshKey={refreshKey}
+            formOpen={formOpen}
+            onRegister={beginRegistration}
+            onEdit={beginEdit}
+            onDelete={requestDelete}
+            onActivate={setSelectedAccount}
+          />
+        )}
       </ApplicationPageStack>
 
       <ResourceActionConfirmationDialog

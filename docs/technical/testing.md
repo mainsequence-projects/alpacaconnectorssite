@@ -16,7 +16,8 @@ directory.
 
 `npm run test:e2e` builds in the explicit test mode and uses a cross-origin host fixture. The
 browser suite checks the direct development transport, asset and universe flows, account CRUD by
-Secret reference, bars-configuration CRUD, the iframe handshake, delegated request headers, live theme changes, documentation routes, and Command Center
+Secret reference, bars-configuration CRUD, signal Job CRUD and lifecycle actions, the iframe
+handshake, delegated request headers, live theme changes, documentation routes, and Command Center
 layout geometry at phone, tablet, and desktop widths.
 
 The asset fixture implements the observable registration-operation contract. Browser coverage

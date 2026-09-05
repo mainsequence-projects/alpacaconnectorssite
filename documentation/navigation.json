@@ -30,6 +30,16 @@
           "label": "Bars",
           "doc": "surfaces/bars",
           "items": []
+        },
+        {
+          "label": "Signals",
+          "doc": "surfaces/signals",
+          "items": []
+        },
+        {
+          "label": "ETF Portfolios",
+          "doc": "surfaces/portfolios",
+          "items": []
         }
       ]
     },

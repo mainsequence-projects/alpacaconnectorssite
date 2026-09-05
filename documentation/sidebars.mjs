@@ -53,6 +53,24 @@ const sidebars = {
             "id": "surfaces/bars"
           },
           "items": []
+        },
+        {
+          "type": "category",
+          "label": "Signals",
+          "link": {
+            "type": "doc",
+            "id": "surfaces/signals"
+          },
+          "items": []
+        },
+        {
+          "type": "category",
+          "label": "ETF Portfolios",
+          "link": {
+            "type": "doc",
+            "id": "surfaces/portfolios"
+          },
+          "items": []
         }
       ]
     },

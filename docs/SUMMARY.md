@@ -8,6 +8,8 @@ This map and the Docusaurus sidebar are generated from `documentation/navigation
   - [Accounts](surfaces/accounts.md)
   - [Universes](surfaces/universes.md)
   - [Bars](surfaces/bars.md)
+  - [Signals](surfaces/signals.md)
+  - [ETF Portfolios](surfaces/portfolios.md)
 - [Technical documentation](technical/index.md)
   - [Frontend implementation plan](technical/frontend-implementation-plan.md)
   - [Architecture](technical/architecture.md)

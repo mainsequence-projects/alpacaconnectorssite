@@ -16,13 +16,16 @@ This repository is the Command Center static-site application for the Alpaca Con
 
 ## Current API surfaces
 
-- Assets: exact-symbol or ETF-seed registration planning and execution, with polling of the API's
+- Assets: exact-symbol registration planning and execution, with polling of the API's
   persisted operation and ordered step status.
 - Accounts: create, list, update, and delete Alpaca registrations by selecting visible Main
   Sequence Secret names; never accept credential values.
-- Universes: holdings-backed universe planning and execution.
+- Universes: account-independent ETF holdings sources; Run asks for an Alpaca account only as
+  execution context when it registers newly discovered constituents.
 - Bars: create, list, edit, and delete stored Alpaca bar configurations using registered accounts,
   exactly one asset source, and an already-migrated market-data profile.
+- Signals: create and operate one dedicated Main Sequence Job per Universe-backed signal
+  configuration; `account_uid` is runtime-only and JobRuns receive no business arguments.
 - Documentation: project-wide capability and configuration reference, plus workflow and technical
   guidance. Documentation is a footer application in the SDK navigation rail, not an application
   page or a custom link outside the rail.

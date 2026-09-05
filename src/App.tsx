@@ -9,7 +9,11 @@ import {
   type NavigationApplicationDefinition,
   type NavigationIntent,
 } from "@dev-mainsequence/command-center-sdk/navigation";
-import { BookOpen, ChartCandlestick, Info, Landmark, Layers3, PackageSearch } from "lucide-react";
+import {
+  ResourcePicker,
+  type ResourcePickerOption,
+} from "@dev-mainsequence/command-center-sdk/views";
+import { Activity, BookOpen, BriefcaseBusiness, ChartCandlestick, Info, Landmark, Layers3, PackageSearch } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -18,21 +22,26 @@ import {
   createApiClient,
   loadProjectConfiguration,
   normalizeSymbols,
+  type Account,
   type ApiTransport,
   type AssetRegistrationExecuteResponse,
   type AssetRegistrationOperationResponse,
   type AssetRegistrationPlanResponse,
   type AssetRegistrationRequest,
-  type MaterializedUniverse,
-  type MaterializedUniverseCreateRequest,
+  type AssetUniverse,
+  type AssetUniverseCreateRequest,
   type ProjectConfigurationResponse,
+  type ResourceCollection,
 } from "./api";
 import { useAlpacaApiTransport, type ApplicationTransportStatus } from "./transport";
 import { AccountsPage } from "./accounts";
+import { AssetResourceList } from "./assetResource";
 import { BarsConfigurationsPage } from "./barConfigurations";
+import { PortfoliosPage } from "./portfolios";
+import { SignalsPage } from "./signals";
 import { UniverseResourceList } from "./universeResource";
 
-type RouteId = "assets" | "accounts" | "universes" | "bars";
+type RouteId = "assets" | "accounts" | "universes" | "bars" | "signals" | "portfolios";
 const ASSET_OPERATION_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 type ActionState<T> =
   | { state: "idle" }
@@ -45,6 +54,8 @@ const ROUTE_PATHS: Record<RouteId, string> = {
   accounts: "/accounts",
   universes: "/universes",
   bars: "/bars",
+  signals: "/signals",
+  portfolios: "/portfolios",
 };
 
 function AlpacaNavigationIcon({ className }: { className?: string }) {
@@ -85,6 +96,20 @@ const NAVIGATION: NavigationApplicationDefinition = {
           icon: ChartCandlestick,
           description: "Manage reusable market-data configurations",
         },
+        {
+          id: "signals",
+          label: "ETF Weight Signal",
+          href: "/signals",
+          icon: Activity,
+          description: "Schedule Universe-backed ETF signals",
+        },
+        {
+          id: "portfolios",
+          label: "ETF Portfolios",
+          href: "/portfolios",
+          icon: BriefcaseBusiness,
+          description: "Build scheduled analytical portfolios",
+        },
       ],
     },
     {
@@ -107,6 +132,8 @@ function routeFromPath(pathname: string): RouteId {
   if (pathname.startsWith("/accounts")) return "accounts";
   if (pathname.startsWith("/universes")) return "universes";
   if (pathname.startsWith("/bars")) return "bars";
+  if (pathname.startsWith("/signals")) return "signals";
+  if (pathname.startsWith("/portfolios")) return "portfolios";
   return "assets";
 }
 
@@ -162,6 +189,24 @@ function SymbolList({ label, values }: { label: string; values: string[] }) {
           <span className="tag" key={value}>{value}</span>
         ))}
       </div>
+    </div>
+  );
+}
+
+function WarningList({ warnings }: { warnings: Record<string, string> }) {
+  const entries = Object.entries(warnings);
+  if (entries.length === 0) return null;
+  return (
+    <div className="result-group">
+      <h4>OpenFIGI enrichment warnings</h4>
+      <dl className="summary-list">
+        {entries.map(([symbol, reason]) => (
+          <div key={symbol}>
+            <dt>{symbol}</dt>
+            <dd>{reason}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }
@@ -280,26 +325,50 @@ function ActionResult({ action }: { action: ActionState<unknown> }) {
   );
 }
 
-function AssetsPage({ transport, providers }: { transport: ApiTransport; providers: string[] }) {
-  const [mode, setMode] = useState<"symbols" | "seed">("symbols");
+function AssetsPage({ transport }: { transport: ApiTransport }) {
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [accountUid, setAccountUid] = useState("");
   const [symbols, setSymbols] = useState("AAPL, MSFT");
-  const [seedTickers, setSeedTickers] = useState("IVV");
-  const [provider, setProvider] = useState(providers[0] ?? "ishares");
-  const [includeNonTradable, setIncludeNonTradable] = useState(false);
   const [timeout, setTimeoutValue] = useState(30);
   const [action, setAction] = useState<ActionState<AssetRegistrationPlanResponse | AssetRegistrationExecuteResponse>>({ state: "idle" });
   const [operation, setOperation] = useState<AssetRegistrationOperationResponse | null>(null);
   const [approvedRequestKey, setApprovedRequestKey] = useState<string | null>(null);
+  const [assetRefreshKey, setAssetRefreshKey] = useState(0);
   const activeRequest = useRef<AbortController | null>(null);
   const api = useMemo(() => createApiClient(transport), [transport]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    setAccountsLoading(true);
+    setAccountsError(null);
+    api.get<ResourceCollection<Account>>(
+      `${API_ENDPOINTS.accounts}?limit=100&offset=0&active=true&ordering=account_name`,
+      controller.signal,
+    )
+      .then((response) => setAccounts(response.items))
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) setAccountsError(formatError(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setAccountsLoading(false);
+      });
+    return () => controller.abort();
+  }, [api]);
+
+  const accountOptions = useMemo<ResourcePickerOption[]>(() => accounts.map((account) => ({
+    value: account.uid,
+    label: account.account_name,
+    subtitle: `${account.is_paper ? "Paper" : "Live"} · ${account.unique_identifier}`,
+    keywords: [account.unique_identifier, account.is_paper ? "paper" : "live"],
+  })), [accounts]);
+
   const request = useMemo<AssetRegistrationRequest>(() => ({
-    ...(mode === "symbols"
-      ? { symbols: normalizeSymbols(symbols) }
-      : { seed_tickers: normalizeSymbols(seedTickers), component_provider: provider }),
-    include_non_tradable: includeNonTradable,
+    account_uid: accountUid,
+    symbols: normalizeSymbols(symbols),
     timeout,
-  }), [includeNonTradable, mode, provider, seedTickers, symbols, timeout]);
+  }), [accountUid, symbols, timeout]);
   const requestKey = JSON.stringify(request);
   const busy = action.state === "loading";
 
@@ -313,12 +382,12 @@ function AssetsPage({ transport, providers }: { transport: ApiTransport; provide
 
   async function submit(event: FormEvent, execution: "plan" | "execute") {
     event.preventDefault();
-    if (mode === "symbols" && !request.symbols?.length) {
-      setAction({ state: "error", message: "Enter at least one symbol." });
+    if (!accountUid) {
+      setAction({ state: "error", message: "Select a registered Alpaca account." });
       return;
     }
-    if (mode === "seed" && !request.seed_tickers?.length) {
-      setAction({ state: "error", message: "Enter at least one ETF seed ticker." });
+    if (!request.symbols.length) {
+      setAction({ state: "error", message: "Enter at least one symbol." });
       return;
     }
 
@@ -365,6 +434,7 @@ function AssetsPage({ transport, providers }: { transport: ApiTransport; provide
       } else {
         const result = current.result as AssetRegistrationExecuteResponse;
         setApprovedRequestKey(null);
+        setAssetRefreshKey((currentKey) => currentKey + 1);
         setAction({ state: "success", label: "Registration execution", result });
       }
     } catch (error) {
@@ -384,60 +454,46 @@ function AssetsPage({ transport, providers }: { transport: ApiTransport; provide
         <ApplicationPageHeader
           eyebrow="Assets"
           title="Register Alpaca-backed assets"
-          description="Resolve every symbol against Alpaca and OpenFIGI before writing Main Sequence assets. Planning is always the first step."
+          description="Use a registered Alpaca account to resolve every symbol to Alpaca's immutable asset ID before writing Main Sequence assets. OpenFIGI metadata is optional enrichment."
         />
         <ApplicationCard header={<h2>Registration scope</h2>}>
           <form className="workflow-form" onSubmit={(event) => submit(event, "plan")}>
-            <fieldset className="segmented-fieldset">
-              <legend>Input type</legend>
-              <label><input type="radio" name="asset-mode" checked={mode === "symbols"} disabled={busy} onChange={() => { setMode("symbols"); inputsChanged(); }} /> Exact symbols</label>
-              <label><input type="radio" name="asset-mode" checked={mode === "seed"} disabled={busy} onChange={() => { setMode("seed"); inputsChanged(); }} /> ETF seed</label>
-            </fieldset>
-
-            {mode === "seed" ? (
-              <aside className="workflow-guidance" aria-labelledby="etf-seed-guidance-title">
-                <Info aria-hidden="true" size={20} />
-                <div>
-                  <h3 id="etf-seed-guidance-title">What ETF seed registration does</h3>
-                  <ol>
-                    <li>Expands each ETF seed into its current constituent symbols using the selected provider.</li>
-                    <li>Checks every constituent against Alpaca and resolves its OpenFIGI and Main Sequence identity.</li>
-                    <li>Builds a read-only plan that reports missing, unresolved, and warning cases before anything is written.</li>
-                    <li>Execution registers only fully resolved missing assets. It does not create a universe; use Universes afterward.</li>
-                  </ol>
-                </div>
-              </aside>
-            ) : null}
-
-            {mode === "symbols" ? (
-              <label className="field">Symbols <span>Comma or space separated</span>
-                <textarea value={symbols} disabled={busy} onChange={(event) => { setSymbols(event.target.value); inputsChanged(); }} rows={3} placeholder="AAPL, MSFT, NVDA" />
-              </label>
-            ) : (
-              <div className="form-grid">
-                <label className="field">ETF seed tickers
-                  <input value={seedTickers} disabled={busy} onChange={(event) => { setSeedTickers(event.target.value); inputsChanged(); }} placeholder="IVV" />
-                </label>
-                <label className="field">Component provider
-                  <select value={provider} disabled={busy} onChange={(event) => { setProvider(event.target.value); inputsChanged(); }}>
-                    {(providers.length > 0 ? providers : ["ishares"]).map((item) => <option key={item}>{item}</option>)}
-                  </select>
-                </label>
-              </div>
-            )}
-
-            <div className="form-grid">
-              <label className="field">Timeout (seconds)
-                <input type="number" min={1} max={300} value={timeout} disabled={busy} onChange={(event) => { setTimeoutValue(Number(event.target.value)); inputsChanged(); }} />
-              </label>
-              <label className="checkbox-field">
-                <input type="checkbox" checked={includeNonTradable} disabled={busy} onChange={(event) => { setIncludeNonTradable(event.target.checked); inputsChanged(); }} />
-                Include active, non-tradable Alpaca assets
-              </label>
+            <div className="field resource-picker-field">
+              <label id="asset-registration-account-label">Registered Alpaca account</label>
+              <ResourcePicker
+                ariaLabelledBy="asset-registration-account-label"
+                disabled={busy || accountsError !== null}
+                emptyMessage="No active registered Alpaca accounts."
+                fullWidth
+                loading={accountsLoading}
+                mode="single"
+                onValueChange={(value) => {
+                  setAccountUid(value);
+                  inputsChanged();
+                }}
+                options={accountOptions}
+                placeholder="Select the account used for Alpaca access"
+                searchable
+                searchPlaceholder="Search registered accounts"
+                value={accountUid || null}
+              />
+              {accountsError ? <span className="field-error">{accountsError}</span> : null}
+              {!accountsLoading && !accountsError && accountOptions.length === 0 ? (
+                <span>No active account is registered. <a href="/accounts">Register an account first.</a></span>
+              ) : (
+                <span>Credential values are resolved from the selected account's Main Sequence Secret references.</span>
+              )}
             </div>
+            <label className="field">Exact Alpaca symbols <span>Comma or space separated</span>
+              <textarea value={symbols} disabled={busy} onChange={(event) => { setSymbols(event.target.value); inputsChanged(); }} rows={3} placeholder="AAPL, MSFT, NVDA" />
+            </label>
+
+            <label className="field">Timeout (seconds)
+              <input type="number" min={1} max={300} value={timeout} disabled={busy} onChange={(event) => { setTimeoutValue(Number(event.target.value)); inputsChanged(); }} />
+            </label>
 
             <div className="form-actions">
-              <button className="button button--secondary" type="submit" disabled={busy}>Build plan</button>
+              <button className="button button--secondary" type="submit" disabled={busy || accountsLoading || Boolean(accountsError) || !accountUid}>Build plan</button>
               <button
                 className="button button--primary"
                 type="button"
@@ -454,13 +510,14 @@ function AssetsPage({ transport, providers }: { transport: ApiTransport; provide
         {lastPlan ? (
           <ApplicationCard header={<div className="card-title-row"><h2>Plan readiness</h2><StatusPill tone={lastPlan.can_register ? "success" : "warning"}>{lastPlan.can_register ? "Ready" : "Blocked"}</StatusPill></div>}>
             <SummaryList value={lastPlan.plan_summary} />
-            <SymbolList label="Unresolved" values={lastPlan.unresolved_symbols} />
             <SymbolList label="Missing from Alpaca" values={lastPlan.missing_symbols_from_alpaca} />
             <SymbolList label="Will be registered" values={lastPlan.missing_symbols_to_register} />
+            <WarningList warnings={lastPlan.warnings_by_symbol} />
           </ApplicationCard>
         ) : null}
         {operation ? <RegistrationProgress operation={operation} /> : null}
         {action.state !== "loading" || !operation ? <ActionResult action={action} /> : null}
+        <AssetResourceList transport={transport} refreshKey={assetRefreshKey} />
       </ApplicationPageStack>
     </ApplicationPage>
   );
@@ -470,7 +527,7 @@ function UniversesPage({ transport }: { transport: ApiTransport }) {
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
-  const [action, setAction] = useState<ActionState<MaterializedUniverse>>({ state: "idle" });
+  const [action, setAction] = useState<ActionState<AssetUniverse>>({ state: "idle" });
   const [universeRefreshKey, setUniverseRefreshKey] = useState(0);
   const api = useMemo(() => createApiClient(transport), [transport]);
 
@@ -480,14 +537,14 @@ function UniversesPage({ transport }: { transport: ApiTransport }) {
       setAction({ state: "error", message: "Name, ETF ticker, and holdings source URL are required." });
       return;
     }
-    const request: MaterializedUniverseCreateRequest = {
+    const request: AssetUniverseCreateRequest = {
       name: name.trim(),
       symbol: symbol.trim().toUpperCase(),
       source_url: sourceUrl.trim(),
     };
     setAction({ state: "loading", label: "Creating universe" });
     try {
-      const result = await api.post<MaterializedUniverse>(API_ENDPOINTS.universes, request);
+      const result = await api.post<AssetUniverse>(API_ENDPOINTS.universes, request);
       setAction({ state: "success", label: "Universe created", result });
       setName("");
       setSymbol("");
@@ -504,7 +561,7 @@ function UniversesPage({ transport }: { transport: ApiTransport }) {
         <ApplicationPageHeader
           eyebrow="Universes"
           title="Create and manage ETF holdings universes"
-          description="Create the universe and its explicit holdings-source configuration first. Run is a separate action on the registered universe."
+          description="Each universe stores an ETF holdings source and materializes its components as linked Asset Category membership."
         />
         <ApplicationCard header={<h2>Create universe</h2>}>
           <form className="workflow-form" onSubmit={submit}>
@@ -542,7 +599,7 @@ function UniversesPage({ transport }: { transport: ApiTransport }) {
             </div>
             <div className="workflow-guidance">
               <Info aria-hidden="true" size={18} />
-              <p>Creation saves this explicit source configuration and creates an empty universe with its own UID. It does not extract holdings. After the row appears below, right-click it and choose <strong>Run</strong> to preview and synchronize its memberships.</p>
+              <p>Creation saves the ETF holdings source and creates the linked empty category. <strong>Extract components</strong> reads current holdings and materializes membership; extracted weights are not stored on the Universe. If missing Alpaca-backed assets must be registered, the account is selected only for that execution and is not stored on the Universe.</p>
             </div>
           </form>
         </ApplicationCard>
@@ -552,7 +609,7 @@ function UniversesPage({ transport }: { transport: ApiTransport }) {
               <h3>{action.label}</h3>
               <StatusPill tone="success">Complete</StatusPill>
             </div>
-            <p>Created {action.result.display_name} with UID {action.result.uid} and zero assets. Right-click its row and choose <strong>Run</strong> to synchronize memberships.</p>
+            <p>Created {action.result.display_name} with Universe UID {action.result.uid}, Source UID {action.result.source_uid}, and Asset Category UID {action.result.asset_category_uid}. It has zero assets until component extraction succeeds.</p>
           </section>
         ) : (
           <ActionResult action={action} />
@@ -585,7 +642,7 @@ export default function App() {
 
   useEffect(() => {
     if (!transportState.transport) return;
-    if (route !== "assets" && route !== "bars") {
+    if (route !== "assets" && route !== "bars" && route !== "signals") {
       setConfigurationLoading(false);
       setConfigurationError(null);
       return;
@@ -604,7 +661,6 @@ export default function App() {
     return () => controller.abort();
   }, [reloadKey, route, transportState.transport]);
 
-  const providers = configuration?.supported_component_providers ?? [];
   const terminalTransportError = transportState.error && !transportState.transport;
 
   const handleNavigation = useCallback((intent: NavigationIntent) => {
@@ -660,7 +716,7 @@ export default function App() {
             />
           </ApplicationPage>
         ) : route === "assets" ? (
-          <AssetsPage transport={transportState.transport} providers={providers} />
+          <AssetsPage transport={transportState.transport} />
         ) : route === "accounts" ? (
           <AccountsPage transport={transportState.transport} />
         ) : route === "bars" && configuration ? (
@@ -668,6 +724,10 @@ export default function App() {
             transport={transportState.transport}
             configuration={configuration}
           />
+        ) : route === "signals" ? (
+          <SignalsPage transport={transportState.transport} />
+        ) : route === "portfolios" ? (
+          <PortfoliosPage transport={transportState.transport} />
         ) : (
           <UniversesPage transport={transportState.transport} />
         )}

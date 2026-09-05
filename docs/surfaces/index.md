@@ -4,12 +4,15 @@ slug: /
 
 # Application surfaces
 
-The Alpaca Connectors command center currently has four workflow pages:
+The Alpaca Connectors command center currently has six workflow pages:
 
-- **Assets** plans and executes strict Alpaca and OpenFIGI-backed asset registration.
+- **Assets** plans and executes provider-native Alpaca asset registration, with optional OpenFIGI enrichment.
 - **Accounts** registers and maintains Alpaca accounts through Main Sequence Secret references.
-- **Universes** plans and executes ETF holdings-backed universe synchronization.
+- **Universes** creates explicit Asset Universe registrations and Runs their linked sources.
 - **Bars** creates and maintains reusable Alpaca stock-bar configurations.
+- **Signals** creates and operates one dedicated scheduled Job per Universe-backed ETF signal.
+- **ETF Portfolios** composes an existing signal, bars configuration, persistent interpolated
+  prices, and an ImmediateSignal rebalance policy into a scheduled analytical portfolio.
 
 Planning never changes platform state. Execution remains disabled until the exact current inputs
 have produced a plan without blockers.

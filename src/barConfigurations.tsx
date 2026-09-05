@@ -29,7 +29,7 @@ import {
   type BarConfiguration,
   type BarConfigurationAssetSource,
   type BarConfigurationWriteRequest,
-  type MaterializedUniverse,
+  type AssetUniverse,
   type ProjectConfigurationResponse,
   type ResourceCollection,
 } from "./api";
@@ -219,7 +219,7 @@ export function BarsConfigurationsPage({
   const api = useMemo(() => createApiClient(transport), [transport]);
   const profiles = configuration.migrated_market_data_profiles;
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [universes, setUniverses] = useState<MaterializedUniverse[]>([]);
+  const [universes, setUniverses] = useState<AssetUniverse[]>([]);
   const [dependenciesLoading, setDependenciesLoading] = useState(true);
   const [dependenciesError, setDependenciesError] = useState<string | null>(null);
   const [editing, setEditing] = useState<BarConfiguration | null>(null);
@@ -247,7 +247,7 @@ export function BarsConfigurationsPage({
         `${API_ENDPOINTS.accounts}?limit=100&offset=0&ordering=account_name`,
         controller.signal,
       ),
-      api.get<ResourceCollection<MaterializedUniverse>>(
+      api.get<ResourceCollection<AssetUniverse>>(
         `${API_ENDPOINTS.universes}?limit=100&offset=0&ordering=display_name`,
         controller.signal,
       ),

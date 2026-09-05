@@ -28,7 +28,9 @@ to static-site environment variables.
 
 Endpoint constants and response types live in `src/api.ts`. Transport selection and iframe
 lifecycle live in `src/transport.ts`. The page code orchestrates these contracts but does not
-duplicate registration, holdings extraction, universe synchronization, or platform logic.
+duplicate registration, holdings extraction, Asset Universe Run behavior, or platform logic. An
+`AssetUniverse.uid` is the action and bars-configuration identity; `source_uid` and
+`asset_category_uid` remain explicit linked identities.
 Account credential fields contain Secret names only. The read-only Secret-reference endpoint
 returns names and never serializes values into the browser.
 
@@ -41,4 +43,12 @@ synthetic percentage. Polling stops after the application-owned ten-minute limit
 retrying forever when a worker disappears.
 
 Resource lists and detail pages are added only where the backend exposes authoritative pagination
-and discovery contracts. Accounts, Universes, and Bars currently satisfy that boundary.
+and discovery contracts. Accounts, Universes, Bars, Signals, and ETF Portfolios currently satisfy
+that boundary. Signal and Portfolio routes never ask the browser to invent an Environment or pass
+JobRun business arguments.
+
+The ETF Portfolios page stores only calculation intent in the Portfolio Configuration: references
+to an existing Signal Configuration, Bars Configuration, and Rebalance Configuration plus the
+supported interpolation and portfolio parameters. Schedule, compute, image, and deployment state
+are read from and written to the dedicated Main Sequence Job. The page does not duplicate those
+operational fields in the Portfolio Configuration.

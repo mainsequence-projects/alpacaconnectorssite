@@ -1,8 +1,9 @@
 export const API_ENDPOINTS = {
   configuration: "/v1/project-state/configuration",
+  assets: "/v1/assets",
+  assetDiscovery: "/v1/assets/discovery",
   assetRegistrationOperations: "/v1/assets/registration/operations",
   universeSources: "/v1/universe-sources",
-  universeSync: "/v1/universe-sources/actions/sync",
   universes: "/v1/universes",
   universeDiscovery: "/v1/universes/discovery",
   accounts: "/v1/accounts",
@@ -10,6 +11,12 @@ export const API_ENDPOINTS = {
   accountSecretReferences: "/v1/accounts/secret-references",
   barConfigurations: "/v1/market-data/bar-configurations",
   barConfigurationDiscovery: "/v1/market-data/bar-configurations/discovery",
+  signalJobs: "/v1/signal-jobs",
+  signalJobDiscovery: "/v1/signal-jobs/discovery",
+  portfolioConfigurations: "/v1/portfolio-configurations",
+  portfolioConfigurationDiscovery: "/v1/portfolio-configurations/discovery",
+  portfolioRebalanceConfigurations: "/v1/portfolio-rebalance-configurations",
+  portfolioRebalanceConfigurationDiscovery: "/v1/portfolio-rebalance-configurations/discovery",
 } as const;
 
 export function assetRegistrationOperationPath(operationUid: string): string {
@@ -20,10 +27,16 @@ export function universeSourcePreviewPath(sourceUid: string): string {
   return `${API_ENDPOINTS.universeSources}/${encodeURIComponent(sourceUid)}/actions/preview`;
 }
 
+export function signalObservationsPath(configurationUid: string, limit = 100): string {
+  return `${API_ENDPOINTS.signalJobs}/${encodeURIComponent(configurationUid)}/observations?limit=${limit}`;
+}
+
 export interface ProjectConfigurationResponse {
   supported_component_providers: string[];
   migrated_market_data_profiles: string[];
   universe_sources_are_user_managed: boolean;
+  organization_environment_uid: string | null;
+  organization_environment_name: string | null;
   [key: string]: unknown;
 }
 
@@ -46,13 +59,51 @@ export interface Account {
 
 export type AccountSummary = Account;
 
+export interface AccountHoldingDetails {
+  symbol?: string | null;
+  kind?: string | null;
+  asset_class?: string | null;
+  exchange?: string | null;
+  avg_entry_price?: string | number | null;
+  market_value?: string | number | null;
+  cost_basis?: string | number | null;
+  unrealized_pl?: string | number | null;
+  current_price?: string | number | null;
+  alpaca_asset_id?: string | null;
+}
+
+export interface AccountHolding {
+  time_index: string;
+  account_uid: string;
+  asset_identifier: string;
+  asset_uid: string | null;
+  holdings_set_uid: string;
+  is_trade_snapshot: boolean | null;
+  quantity: number | null;
+  direction: 1 | -1;
+  target_trade_time: string | null;
+  extra_details: AccountHoldingDetails | null;
+}
+
+export interface Asset {
+  uid: string;
+  unique_identifier: string;
+  alpaca_asset_id: string;
+  ticker: string;
+  name: string | null;
+  asset_type: string;
+  exchange: string | null;
+  status: string;
+  tradable: boolean;
+  figi: string | null;
+  composite_figi: string | null;
+}
+
 export interface AccountRegistrationRequest {
   account_name: string;
   environment: "paper" | "live";
   api_key_secret_name: string;
   secret_key_secret_name: string;
-  capture_initial_holdings: boolean;
-  register_missing_assets: boolean;
 }
 
 export interface AccountUpdateRequest {
@@ -67,10 +118,8 @@ export interface SecretReference {
 }
 
 export interface AssetRegistrationRequest {
-  symbols?: string[];
-  seed_tickers?: string[];
-  component_provider?: string;
-  include_non_tradable: boolean;
+  account_uid: string;
+  symbols: string[];
   timeout: number;
 }
 
@@ -79,9 +128,9 @@ export interface AssetRegistrationPlanResponse {
   plan_summary: Record<string, unknown>;
   resolution_summary: Record<string, unknown>;
   can_register: boolean;
-  unresolved_symbols: string[];
   missing_symbols_from_alpaca: string[];
   missing_symbols_to_register: string[];
+  openfigi_unmatched_symbols: string[];
   warnings_by_symbol: Record<string, string>;
 }
 
@@ -92,9 +141,8 @@ export interface AssetRegistrationExecuteResponse {
   assets_by_symbol: Record<string, string>;
   existing_asset_uids_by_symbol: Record<string, string>;
   created_asset_uids_by_symbol: Record<string, string>;
-  unresolved_symbols: string[];
-  not_registered_missing_figi_symbols: string[];
   not_registered_missing_alpaca_symbols: string[];
+  openfigi_unmatched_symbols: string[];
   warnings_by_symbol: Record<string, string>;
 }
 
@@ -170,31 +218,32 @@ export interface UniverseSourcePreviewResponse {
   has_blockers: boolean;
 }
 
-export interface UniverseSyncResult {
+export interface AssetUniverse {
+  uid: string;
   source_uid: string;
-  unique_identifier: string;
+  asset_category_uid: string;
   display_name: string;
-  asset_uids: string[];
+  symbol: string;
+  source_url: string;
+  description: string | null;
+  is_active: boolean;
   asset_count: number;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface UniverseSourceSyncResponse {
-  results: UniverseSyncResult[];
-}
-
-export interface MaterializedUniverse {
+export interface AssetCategorySummary {
   uid: string;
   unique_identifier: string;
   display_name: string;
   description: string | null;
-  is_active: boolean;
-  source_uid: string | null;
-  asset_uids: string[];
-  asset_identifiers: string[];
-  asset_count: number;
 }
 
-export interface MaterializedUniverseCreateRequest {
+export interface AssetUniverseDetail extends AssetUniverse {
+  asset_category: AssetCategorySummary;
+}
+
+export interface AssetUniverseCreateRequest {
   name: string;
   symbol: string;
   source_url: string;
@@ -230,6 +279,175 @@ export interface BarConfigurationWriteRequest {
   feed: string;
   adjustment: string;
 }
+
+export type SignalScheduleType = "interval" | "crontab";
+export type SignalSchedulePeriod = "seconds" | "minutes" | "hours" | "days";
+
+export interface SignalJobConfiguration {
+  uid: string;
+  name: string;
+  description: string | null;
+  signal_uid: string;
+  universe_uid: string;
+  account_uid: string;
+  job_uid: string | null;
+  enabled: boolean;
+  schedule_type: SignalScheduleType;
+  schedule_every: number | null;
+  schedule_period: SignalSchedulePeriod | null;
+  schedule_expression: string | null;
+  schedule_start_time: string | null;
+  cpu_request: string;
+  memory_request: string;
+  max_runtime_seconds: number;
+  spot: boolean;
+  lifecycle_state: "provisioning" | "ready" | "paused" | "error" | "deleting";
+  last_error: string | null;
+  job_image_status: string | null;
+  job_automatic_deployment: boolean | null;
+  latest_run_status: string | null;
+  latest_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SignalJobConfigurationWriteRequest {
+  name: string;
+  description: string | null;
+  universe_uid: string;
+  account_uid: string;
+  enabled: boolean;
+  schedule_type: SignalScheduleType;
+  schedule_every: number | null;
+  schedule_period: SignalSchedulePeriod | null;
+  schedule_expression: string | null;
+  schedule_start_time: string | null;
+  cpu_request: string;
+  memory_request: string;
+  max_runtime_seconds: number;
+  spot: boolean;
+}
+
+export interface SignalJobRunAccepted {
+  configuration_uid: string;
+  job_uid: string;
+  job_run_uid: string;
+  status: string;
+  status_url: string;
+  poll_after_ms: number;
+}
+
+export interface SignalJobRun {
+  uid: string;
+  job_uid: string;
+  job_name: string;
+  status: string;
+  execution_start: string | null;
+  execution_end: string | null;
+  commit_hash: string | null;
+  runtime_image_uid: string | null;
+  runtime_image_digest: string | null;
+  logs_url: string | null;
+  failure_message: string | null;
+}
+
+export interface SignalObservationAsset {
+  asset_identifier: string;
+  symbol: string | null;
+  name: string | null;
+  weights: Array<number | null>;
+}
+
+export interface SignalObservations {
+  configuration_uid: string;
+  signal_uid: string;
+  observation_count: number;
+  asset_count: number;
+  time_indexes: string[];
+  assets: SignalObservationAsset[];
+}
+
+export type PortfolioRebalanceStrategy = "immediate_signal";
+
+export interface PortfolioRebalanceConfiguration {
+  uid: string;
+  name: string;
+  description: string | null;
+  strategy: PortfolioRebalanceStrategy;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PortfolioJobSettings {
+  schedule_type: SignalScheduleType;
+  schedule_every: number | null;
+  schedule_period: SignalSchedulePeriod | null;
+  schedule_expression: string | null;
+  schedule_start_time: string | null;
+  cpu_request: string;
+  memory_request: string;
+  max_runtime_seconds: number;
+  spot: boolean;
+}
+
+export interface PortfolioJob {
+  uid: string;
+  schedule_type: SignalScheduleType | null;
+  schedule_every: number | null;
+  schedule_period: SignalSchedulePeriod | null;
+  schedule_expression: string | null;
+  schedule_start_time: string | null;
+  cpu_request: string | null;
+  memory_request: string | null;
+  max_runtime_seconds: number | null;
+  spot: boolean;
+  image_status: string | null;
+  automatic_deployment: boolean;
+}
+
+export interface PortfolioConfiguration {
+  uid: string;
+  name: string;
+  description: string | null;
+  signal_configuration_uid: string;
+  signal_uid: string;
+  bars_configuration_uid: string;
+  rebalance_configuration_uid: string;
+  rebalance_strategy: PortfolioRebalanceStrategy;
+  portfolio_uid: string | null;
+  job_uid: string | null;
+  upsample_frequency_id: "1d";
+  intraday_bar_interpolation_rule: "ffill";
+  valuation_column: string;
+  portfolio_prices_frequency: "1d" | null;
+  forward_fill_to_now: boolean;
+  fail_on_missing_prices: boolean;
+  commission_fee: number;
+  job: PortfolioJob | null;
+  latest_run_status: string | null;
+  latest_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PortfolioConfigurationWriteRequest {
+  name: string;
+  description: string | null;
+  signal_configuration_uid: string;
+  bars_configuration_uid: string;
+  rebalance_configuration_uid: string;
+  upsample_frequency_id: "1d";
+  intraday_bar_interpolation_rule: "ffill";
+  valuation_column: string;
+  portfolio_prices_frequency: "1d" | null;
+  forward_fill_to_now: boolean;
+  fail_on_missing_prices: boolean;
+  commission_fee: number;
+  job: PortfolioJobSettings;
+}
+
+export type PortfolioJobRunAccepted = SignalJobRunAccepted;
+export type PortfolioJobRun = SignalJobRun;
 
 export interface ApiTransport {
   request<T>(path: string, init?: RequestInit): Promise<T>;
