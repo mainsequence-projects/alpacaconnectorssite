@@ -406,6 +406,9 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
   await expect(form.getByText("does not write synthetic InterpolatedPrices rows", { exact: false })).toBeVisible();
   await expect(form.getByRole("checkbox", { name: "Stop when a required asset has no price" })).toBeVisible();
   await expect(form.getByText("Independent policies:", { exact: false })).toBeVisible();
+  await expect(form.getByLabel("Portfolio calculation notes")).toBeVisible();
+  await expect(form.locator(".workflow-form-section").last()).toContainText("Job resources");
+  await expect(form.locator(".workflow-form-section + .workflow-guidance")).toBeVisible();
   await form.getByLabel("Portfolio name").fill("Daily observed IVV portfolio");
   await form.getByRole("button", { name: "ETF weight Signal" }).click();
   await page.getByRole("option", { name: /Daily IVV observation/ }).click();

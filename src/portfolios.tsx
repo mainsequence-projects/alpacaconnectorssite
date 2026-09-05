@@ -708,7 +708,6 @@ export function PortfoliosPage({ transport }: { transport: ApiTransport }) {
                   </div>
                   <p className="policy-fieldset__note"><strong>Independent policies:</strong> forward-fill handles dates after an asset has a known price; strict missing-price validation catches assets with no usable price. You may enable either or both.</p>
                 </fieldset>
-                <div className="workflow-guidance"><Info aria-hidden="true" size={18} /><p>Phase 1 uses a persistent daily <strong>InterpolatedPrices</strong> dependency with forward-fill interpolation for source-bar gaps, then applies observed weights through <strong>ImmediateSignal</strong>. Signal timestamps record observation time and do not guarantee exact economic effective time.</p></div>
               </section>
 
               <section className="workflow-form-section">
@@ -746,6 +745,7 @@ export function PortfoliosPage({ transport }: { transport: ApiTransport }) {
                 <label className="checkbox-field"><input type="checkbox" checked={spot} onChange={(event) => setSpot(event.target.checked)} disabled={busy} />Prefer spot capacity</label>
               </section>
               {dependenciesError ? <p className="form-error" role="alert">{dependenciesError}</p> : null}
+              <aside className="workflow-guidance" aria-label="Portfolio calculation notes"><Info aria-hidden="true" size={18} /><p>Phase 1 uses a persistent daily <strong>InterpolatedPrices</strong> dependency with forward-fill interpolation for source-bar gaps, then applies observed weights through <strong>ImmediateSignal</strong>. Signal timestamps record observation time and do not guarantee exact economic effective time.</p></aside>
               <div className="form-actions"><button className="button button--primary" type="submit" disabled={!canSubmit}>{editingPortfolio ? "Save changes" : "Create portfolio"}</button><button className="button button--secondary" type="button" onClick={() => { resetPortfolioForm(); setPortfolioFormOpen(false); }} disabled={busy}>Cancel</button></div>
             </form>
           </ApplicationCard>
