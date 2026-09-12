@@ -1,4 +1,3 @@
-import { ApplicationStatusScreen } from "@dev-mainsequence/command-center-sdk/feedback";
 import {
   ApplicationCard,
   ApplicationPage,
@@ -36,6 +35,7 @@ import {
   type ResourceCollection,
   type SecretReference,
 } from "./api";
+import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
 
 type MutationState =
   | { state: "idle" }
@@ -600,7 +600,7 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
   }
 
   return (
-    <ApplicationPage as="main" maxWidth="content">
+    <ApplicationPage as="main" maxWidth="full">
       <ApplicationPageStack>
         <ApplicationPageHeader
           eyebrow="Accounts"
@@ -735,20 +735,17 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
         ) : null}
 
         {mutation.state === "loading" ? (
-          <ApplicationStatusScreen
-            as="section"
-            state="loading"
+          <RequestProgressDialog
+            open
             title={mutation.label}
             message="Waiting for the Alpaca Connectors API."
-            variant="contained"
           />
         ) : mutation.state === "error" ? (
-          <ApplicationStatusScreen
-            as="section"
-            state="error"
+          <RequestErrorDialog
+            open
             title="Account request failed"
             message={mutation.message}
-            variant="contained"
+            onClose={() => setMutation({ state: "idle" })}
           />
         ) : mutation.state === "success" ? (
           <section className="action-result" aria-live="polite">

@@ -7,8 +7,8 @@ existing Main Sequence Secret names and never accept Alpaca credential values.
 
 ## Local development
 
-Use Node 24 and copy `.env.example` to `.env.local`. Point `VITE_API_BASE_URL` at the local API,
-then run:
+Use Node 24 and start the Alpaca Connectors FastAPI process on `http://127.0.0.1:8321`. The
+tracked `.env.development` points standalone Vite development at that API, so then run:
 
 ```bash
 npm ci
@@ -16,7 +16,9 @@ npm run dev
 ```
 
 The direct API transport is deliberately limited to development and end-to-end builds. A normal
-production build requires the Command Center iframe bridge and a FastAPI ResourceRelease UID.
+production build requires the Command Center iframe bridge. Its FastAPI ResourceRelease UID is
+provided separately by `.mainsequence/workflows/alpaca-connectors-site.yaml` as public build-time
+configuration; production does not use `VITE_API_BASE_URL`.
 
 ## Verification
 

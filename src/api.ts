@@ -296,6 +296,7 @@ export interface SignalJobConfiguration {
   schedule_every: number | null;
   schedule_period: SignalSchedulePeriod | null;
   schedule_expression: string | null;
+  schedule_timezone: string | null;
   schedule_start_time: string | null;
   cpu_request: string;
   memory_request: string;
@@ -321,6 +322,7 @@ export interface SignalJobConfigurationWriteRequest {
   schedule_every: number | null;
   schedule_period: SignalSchedulePeriod | null;
   schedule_expression: string | null;
+  schedule_timezone: string | null;
   schedule_start_time: string | null;
   cpu_request: string;
   memory_request: string;
@@ -383,6 +385,7 @@ export interface PortfolioJobSettings {
   schedule_every: number | null;
   schedule_period: SignalSchedulePeriod | null;
   schedule_expression: string | null;
+  schedule_timezone: string | null;
   schedule_start_time: string | null;
   cpu_request: string;
   memory_request: string;
@@ -396,6 +399,8 @@ export interface PortfolioJob {
   schedule_every: number | null;
   schedule_period: SignalSchedulePeriod | null;
   schedule_expression: string | null;
+  schedule_timezone: string | null;
+  schedule_timezone_explicit: boolean | null;
   schedule_start_time: string | null;
   cpu_request: string | null;
   memory_request: string | null;
@@ -428,6 +433,93 @@ export interface PortfolioConfiguration {
   latest_run_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface PortfolioLinkedSignal {
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  universe_name: string;
+  universe_symbol: string;
+  account_name: string;
+  account_environment: "paper" | "live";
+}
+
+export interface PortfolioLinkedBars {
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  account_name: string;
+  account_environment: "paper" | "live";
+  asset_source: "assets" | "universe" | "account_holdings";
+  asset_source_name: string;
+  asset_count: number | null;
+  frequency_id: string;
+  feed: string;
+  adjustment: string;
+}
+
+export interface PortfolioLinkedRebalance {
+  name: string;
+  description: string | null;
+  strategy: PortfolioRebalanceStrategy;
+}
+
+export interface PortfolioValueObservation {
+  time_index: string;
+  close: number | null;
+  period_return: number | null;
+  calculated_close: number | null;
+  close_time: string | null;
+  cumulative_return: number | null;
+  drawdown: number | null;
+}
+
+export interface PortfolioPerformance {
+  methodology: "empyrical-reloaded";
+  frequency: "daily";
+  annualization_factor: number;
+  risk_free_rate: number;
+  observation_count: number;
+  return_observation_count: number;
+  period_start: string | null;
+  period_end: string | null;
+  total_return: number | null;
+  annualized_return: number | null;
+  annualized_volatility: number | null;
+  sharpe_ratio: number | null;
+  sortino_ratio: number | null;
+  max_drawdown: number | null;
+  calmar_ratio: number | null;
+  best_period_return: number | null;
+  worst_period_return: number | null;
+  positive_period_ratio: number | null;
+}
+
+export interface CanonicalPortfolioDetail {
+  materialized: boolean;
+  description: string | null;
+  calendar_name: string | null;
+  calendar_type: string | null;
+  calendar_timezone: string | null;
+  calendar_valid_from: string | null;
+  calendar_valid_to: string | null;
+  backtest_price_column: string | null;
+  observation_count: number;
+  total_observation_count: number;
+  history_window_truncated: boolean;
+  latest_observation_at: string | null;
+  latest_close: number | null;
+  latest_period_return: number | null;
+  performance: PortfolioPerformance;
+  observations: PortfolioValueObservation[];
+}
+
+export interface PortfolioConfigurationDetail extends PortfolioConfiguration {
+  linked_signal: PortfolioLinkedSignal;
+  linked_bars: PortfolioLinkedBars;
+  linked_rebalance: PortfolioLinkedRebalance;
+  canonical_portfolio: CanonicalPortfolioDetail;
 }
 
 export interface PortfolioConfigurationWriteRequest {

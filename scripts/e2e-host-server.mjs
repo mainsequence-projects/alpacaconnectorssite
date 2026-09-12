@@ -215,6 +215,7 @@ let signalJobs = [
     schedule_every: 1,
     schedule_period: "days",
     schedule_expression: null,
+    schedule_timezone: null,
     schedule_start_time: null,
     cpu_request: "0.25",
     memory_request: "0.5",
@@ -265,6 +266,8 @@ let portfolioConfigurations = [
       schedule_every: 1,
       schedule_period: "days",
       schedule_expression: null,
+      schedule_timezone: null,
+      schedule_timezone_explicit: null,
       schedule_start_time: null,
       cpu_request: "0.25",
       memory_request: "0.5",
@@ -279,6 +282,102 @@ let portfolioConfigurations = [
     updated_at: "2026-01-03T15:00:00Z",
   },
 ];
+
+function portfolioConfigurationDetail(configuration) {
+  const materialized = configuration.portfolio_uid !== null;
+  const observations = materialized ? [
+    {
+      time_index: "2026-01-01T15:00:00Z",
+      close: 100,
+      period_return: null,
+      calculated_close: 100,
+      close_time: "2026-01-01T21:00:00Z",
+      cumulative_return: 0,
+      drawdown: 0,
+    },
+    {
+      time_index: "2026-01-02T15:00:00Z",
+      close: 100.82,
+      period_return: 0.0082,
+      calculated_close: 100.82,
+      close_time: "2026-01-02T21:00:00Z",
+      cumulative_return: 0.0082,
+      drawdown: 0,
+    },
+    {
+      time_index: "2026-01-03T15:00:00Z",
+      close: 101.4,
+      period_return: 0.0057528,
+      calculated_close: 101.4,
+      close_time: "2026-01-03T21:00:00Z",
+      cumulative_return: 0.014,
+      drawdown: 0,
+    },
+  ] : [];
+  return {
+    ...configuration,
+    linked_signal: {
+      name: "Daily IVV observation",
+      description: "Observe current IVV constituents and weights.",
+      enabled: true,
+      universe_name: "iShares Core S&P 500 ETF",
+      universe_symbol: "IVV",
+      account_name: "Paper brokerage",
+      account_environment: "paper",
+    },
+    linked_bars: {
+      name: "Daily paper holdings",
+      description: "Daily SIP bars for the configured universe.",
+      enabled: true,
+      account_name: "Paper brokerage",
+      account_environment: "paper",
+      asset_source: "universe",
+      asset_source_name: "iShares Core S&P 500 ETF (IVV)",
+      asset_count: 504,
+      frequency_id: "1d",
+      feed: "sip",
+      adjustment: "all",
+    },
+    linked_rebalance: portfolioRebalanceConfigurations[0],
+    canonical_portfolio: {
+      materialized,
+      description: configuration.description,
+      calendar_name: materialized ? "NYSE trading calendar" : null,
+      calendar_type: materialized ? "exchange_calendar" : null,
+      calendar_timezone: materialized ? "America/New_York" : null,
+      calendar_valid_from: materialized ? "2026-01-01" : null,
+      calendar_valid_to: materialized ? "2026-12-31" : null,
+      backtest_price_column: materialized ? "close" : null,
+      observation_count: observations.length,
+      total_observation_count: observations.length,
+      history_window_truncated: false,
+      latest_observation_at: observations.at(-1)?.time_index ?? null,
+      latest_close: observations.at(-1)?.close ?? null,
+      latest_period_return: observations.at(-1)?.period_return ?? null,
+      performance: {
+        methodology: "empyrical-reloaded",
+        frequency: "daily",
+        annualization_factor: 252,
+        risk_free_rate: 0,
+        observation_count: observations.length,
+        return_observation_count: materialized ? 2 : 0,
+        period_start: observations.at(0)?.time_index ?? null,
+        period_end: observations.at(-1)?.time_index ?? null,
+        total_return: materialized ? 0.014 : null,
+        annualized_return: materialized ? 4.74 : null,
+        annualized_volatility: materialized ? 0.0275 : null,
+        sharpe_ratio: materialized ? 49.8 : null,
+        sortino_ratio: null,
+        max_drawdown: materialized ? 0 : null,
+        calmar_ratio: null,
+        best_period_return: materialized ? 0.0082 : null,
+        worst_period_return: materialized ? 0.0057528 : null,
+        positive_period_ratio: materialized ? 1 : null,
+      },
+      observations,
+    },
+  };
+}
 const signalObservations = {
   "signal-existing": {
     configuration_uid: "signal-existing",
@@ -1089,7 +1188,7 @@ createServer(async (request, response) => {
               type: "select",
               options: [
                 { value: "account_holdings", label: "Latest account holdings" },
-                { value: "universe", label: "Registered universe" },
+                { value: "universe", label: "Universe assets" },
                 { value: "assets", label: "Explicit assets" },
               ],
             },
@@ -1164,7 +1263,7 @@ createServer(async (request, response) => {
       contract: "command-center.resource_discovery@v1",
       resource: {
         id: "alpaca-etf-signal-jobs",
-        label: "ETF Signals",
+        label: "ETF Weight Signals",
         item_label: "signal Job",
         identity: { fields: ["uid"] },
       },
@@ -1326,7 +1425,6 @@ createServer(async (request, response) => {
         columns: [
           { id: "name", header: "Portfolio", value_path: "name", data_type: "text", default_visible: true, hideable: false, sortable_key: "name" },
           { id: "rebalance-strategy", header: "Rebalance", value_path: "rebalance_strategy", data_type: "text", default_visible: true, hideable: true },
-          { id: "portfolio-uid", header: "Portfolio UID", value_path: "portfolio_uid", data_type: "text", default_visible: true, hideable: true },
           { id: "job-image-status", header: "Image", value_path: "job.image_status", data_type: "text", default_visible: true, hideable: true },
           { id: "latest-run-status", header: "Last Run", value_path: "latest_run_status", data_type: "text", default_visible: true, hideable: true },
           { id: "latest-run-at", header: "Last Run At", value_path: "latest_run_at", data_type: "datetime", default_visible: true, hideable: true },
@@ -1381,6 +1479,7 @@ createServer(async (request, response) => {
       job: {
         uid: `job-portfolio-${ordinal}`,
         ...body.job,
+        schedule_timezone_explicit: body.job.schedule_timezone !== null,
         image_status: "ready",
         automatic_deployment: true,
       },
@@ -1418,7 +1517,7 @@ createServer(async (request, response) => {
     const uid = decodeURIComponent(portfolioConfigurationMatch[1]);
     const index = portfolioConfigurations.findIndex((configuration) => configuration.uid === uid);
     if (index < 0) return sendJson(response, 404, { detail: "Portfolio configuration not found." });
-    if (request.method === "GET") return sendJson(response, 200, portfolioConfigurations[index]);
+    if (request.method === "GET") return sendJson(response, 200, portfolioConfigurationDetail(portfolioConfigurations[index]));
     if (request.method === "PATCH") {
       const body = await readJson(request);
       const { job: jobSettings, ...configurationFields } = body;

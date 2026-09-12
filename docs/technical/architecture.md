@@ -19,10 +19,14 @@ production visit fails closed with an application status screen.
 | --- | --- |
 | `VITE_COMMAND_CENTER_ORIGIN` | Exact trusted parent origin for the iframe protocol |
 | `VITE_FASTAPI_RESOURCE_RELEASE_UID` | Public target FastAPI ResourceRelease UID |
-| `VITE_API_BASE_URL` | Local development API origin; ignored by normal production builds |
+| `VITE_API_BASE_URL` | Local development API origin (`http://127.0.0.1:8321`); ignored by normal production builds |
 
 These are routing values, not secrets. Alpaca API keys and Main Sequence tokens must never be added
 to static-site environment variables.
+
+The tracked `.env.development` owns the direct local URL used by `npm run dev`. Production owns the
+FastAPI release UID through the Static Site workflow's `build_environment`; the two modes therefore
+cannot accidentally route to the Main Sequence Django development backend on port `8000`.
 
 ## Backend contract
 
@@ -43,9 +47,17 @@ synthetic percentage. Polling stops after the application-owned ten-minute limit
 retrying forever when a worker disappears.
 
 Resource lists and detail pages are added only where the backend exposes authoritative pagination
-and discovery contracts. Accounts, Universes, Bars, Signals, and ETF Portfolios currently satisfy
-that boundary. Signal and Portfolio routes never ask the browser to invent an Environment or pass
-JobRun business arguments.
+and discovery contracts. Accounts, Universes, Bars, ETF Weight Signals, Rebalance Configurations,
+and ETF Portfolios currently satisfy that boundary. The three portfolio-related routes are sibling
+destinations in the **Portfolios** navigation group. Signal and Portfolio routes never ask the
+browser to invent an Environment or pass JobRun business arguments.
+
+Short create, update, run, and delete requests use one application-owned modal with the SDK
+`ActivityIndicator`, so pending work does not insert a large status region into the page layout.
+Application startup continues to use `ApplicationStatusScreen`; resource lists, details, pickers,
+and confirmation dialogs retain their own SDK-controlled loading states. Terminal request errors
+remain in the owning route and use capability-specific titles such as **Rebalance configuration
+request failed** rather than a broader portfolio label.
 
 The ETF Portfolios page stores only calculation intent in the Portfolio Configuration: references
 to an existing Signal Configuration, Bars Configuration, and Rebalance Configuration plus the

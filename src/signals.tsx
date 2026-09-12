@@ -49,13 +49,16 @@ import {
   type SignalSchedulePeriod,
   type SignalScheduleType,
 } from "./api";
+import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
 import {
   buildCronExpression,
+  browserScheduleTimezone,
   CRON_WEEKDAYS,
   DEFAULT_CRON_SCHEDULE,
   describeCronSchedule,
   isValidCronExpression,
   parseCronExpression,
+  supportedScheduleTimezones,
   type CronScheduleMode,
 } from "./signalSchedule";
 
@@ -98,7 +101,8 @@ function createResourceHttpClient(transport: ApiTransport): ResourceHttpClient {
 
 function formatSchedule(configuration: SignalJobConfiguration): string {
   if (configuration.schedule_type === "crontab") {
-    return configuration.schedule_expression ?? "Invalid crontab";
+    const expression = configuration.schedule_expression ?? "Invalid crontab";
+    return `${expression} · ${configuration.schedule_timezone ?? "UTC"}`;
   }
   return `Every ${configuration.schedule_every} ${configuration.schedule_period}`;
 }
@@ -233,7 +237,7 @@ function SignalDetail({
     <ResourceDetailShell<SignalJobConfiguration>
       embedded
       breadcrumbs={[
-        { id: "signals", label: "ETF Signals", onSelect: onBack },
+        { id: "signals", label: "ETF Weight Signals", onSelect: onBack },
         { id: configuration.uid, label: configuration.name },
       ]}
       loading={loading}
@@ -360,7 +364,7 @@ function buildSignalResource(transport: ApiTransport) {
 
   return defineResourceApplication({
     id: "alpaca-etf-signal-jobs",
-    label: "ETF Signals",
+    label: "ETF Weight Signals",
     itemLabel: "signal Job",
     description: "Scheduled Universe observations. Each configuration owns one Job and every JobRun resolves that stored configuration.",
     getId: (configuration: SignalJobConfiguration) => configuration.uid,
@@ -462,6 +466,7 @@ export function SignalsPage({
   const [advancedCronExpression, setAdvancedCronExpression] = useState(
     DEFAULT_CRON_SCHEDULE.advancedExpression,
   );
+  const [scheduleTimezone, setScheduleTimezone] = useState(browserScheduleTimezone);
   const [cpuRequest, setCpuRequest] = useState("0.25");
   const [memoryRequest, setMemoryRequest] = useState("0.5");
   const [maxRuntimeSeconds, setMaxRuntimeSeconds] = useState(3600);
@@ -526,9 +531,13 @@ export function SignalsPage({
     () => buildCronExpression(cronEditorValue),
     [cronEditorValue],
   );
+  const timezoneOptions = useMemo(
+    () => supportedScheduleTimezones(scheduleTimezone),
+    [scheduleTimezone],
+  );
   const scheduleValid = scheduleType === "interval"
     ? scheduleEvery > 0
-    : isValidCronExpression(scheduleExpression);
+    : isValidCronExpression(scheduleExpression) && Boolean(scheduleTimezone);
   const canSubmit = Boolean(
     name.trim()
     && universeUid
@@ -557,6 +566,7 @@ export function SignalsPage({
     setCronWeekday(DEFAULT_CRON_SCHEDULE.weekday);
     setCronMonthDay(DEFAULT_CRON_SCHEDULE.monthDay);
     setAdvancedCronExpression(DEFAULT_CRON_SCHEDULE.advancedExpression);
+    setScheduleTimezone(browserScheduleTimezone());
     setCpuRequest("0.25");
     setMemoryRequest("0.5");
     setMaxRuntimeSeconds(3600);
@@ -588,6 +598,7 @@ export function SignalsPage({
     setCronWeekday(cron.weekday);
     setCronMonthDay(cron.monthDay);
     setAdvancedCronExpression(cron.advancedExpression);
+    setScheduleTimezone(item.schedule_timezone ?? "UTC");
     setCpuRequest(item.cpu_request);
     setMemoryRequest(item.memory_request);
     setMaxRuntimeSeconds(item.max_runtime_seconds);
@@ -619,6 +630,7 @@ export function SignalsPage({
       schedule_every: scheduleType === "interval" ? scheduleEvery : null,
       schedule_period: scheduleType === "interval" ? schedulePeriod : null,
       schedule_expression: scheduleType === "crontab" ? scheduleExpression.trim() : null,
+      schedule_timezone: scheduleType === "crontab" ? scheduleTimezone : null,
       schedule_start_time: null,
       cpu_request: cpuRequest.trim(),
       memory_request: memoryRequest.trim(),
@@ -696,11 +708,11 @@ export function SignalsPage({
   ], []);
 
   return (
-    <ApplicationPage as="main" maxWidth={selectedSignal ? "full" : "content"}>
+    <ApplicationPage as="main" maxWidth="full">
       <ApplicationPageStack>
         <ApplicationPageHeader
           eyebrow="Portfolios"
-          title="ETF Signals"
+          title="ETF Weight Signals"
           description="Create one canonical ms-markets Signal and one dedicated Main Sequence Job for each Universe-backed configuration. Each run extracts the current components, registers missing Alpaca assets in bulk, and publishes one observed weight frame."
         />
 
@@ -820,13 +832,18 @@ export function SignalsPage({
                           <input type="number" min={1} max={31} value={cronMonthDay} onChange={(event) => setCronMonthDay(Number(event.target.value))} disabled={busy} />
                         </label>
                       ) : null}
+                      <label className="field">Timezone
+                        <select value={scheduleTimezone} onChange={(event) => setScheduleTimezone(event.target.value)} disabled={busy}>
+                          {timezoneOptions.map((timezone) => <option key={timezone} value={timezone}>{timezone}</option>)}
+                        </select>
+                      </label>
                       <div className="schedule-preview field--wide" aria-live="polite">
                         <div>
                           <span>Generated schedule</span>
-                          <strong>{describeCronSchedule(cronEditorValue)}</strong>
+                          <strong>{describeCronSchedule(cronEditorValue, scheduleTimezone)}</strong>
                         </div>
                         <code>{scheduleExpression || "Invalid schedule"}</code>
-                        <small id="signal-cron-help">Main Sequence stores a standard five-field crontab: minute, hour, day of month, month, and day of week. The current Job contract does not expose a per-Job timezone.</small>
+                        <small id="signal-cron-help">Main Sequence evaluates the five-field crontab in the selected IANA timezone. Daylight-saving changes follow that timezone; the Job keeps the same local clock time.</small>
                       </div>
                     </>
                   )}
@@ -866,9 +883,9 @@ export function SignalsPage({
         ) : null}
 
         {mutation.state === "loading" ? (
-          <ApplicationStatusScreen as="section" state="loading" title={mutation.label} message="Waiting for the Alpaca Connectors API and Main Sequence Job service." variant="contained" />
+          <RequestProgressDialog open title={mutation.label} message="Waiting for the Alpaca Connectors API and Main Sequence Job service." />
         ) : mutation.state === "error" ? (
-          <ApplicationStatusScreen as="section" state="error" title="Signal request failed" message={mutation.message} variant="contained" />
+          <RequestErrorDialog open title="Signal request failed" message={mutation.message} onClose={() => setMutation({ state: "idle" })} />
         ) : mutation.state === "success" ? (
           <section className="action-result" aria-live="polite"><div className="section-heading"><h3>{mutation.message}</h3><span className="status-pill status-pill--success">Complete</span></div></section>
         ) : null}
@@ -889,7 +906,7 @@ export function SignalsPage({
             refreshable
             refreshKey={refreshKey}
             rowActions={rowActions}
-            searchPlaceholder="Search ETF Signals"
+            searchPlaceholder="Search ETF Weight Signals"
           />
         )}
       </ApplicationPageStack>

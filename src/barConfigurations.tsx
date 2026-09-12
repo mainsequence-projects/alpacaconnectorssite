@@ -1,4 +1,3 @@
-import { ApplicationStatusScreen } from "@dev-mainsequence/command-center-sdk/feedback";
 import {
   ApplicationCard,
   ApplicationPage,
@@ -15,7 +14,9 @@ import {
   ResourceActionConfirmationDialog,
   ResourceIconLabelCell,
   ResourceListPage,
+  ResourcePicker,
   ResourceStatusCell,
+  type ResourcePickerOption,
   type ResourceRowAction,
 } from "@dev-mainsequence/command-center-sdk/views";
 import { ChartCandlestick, Info } from "lucide-react";
@@ -33,12 +34,31 @@ import {
   type ProjectConfigurationResponse,
   type ResourceCollection,
 } from "./api";
+import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
 
 type MutationState =
   | { state: "idle" }
   | { state: "loading"; label: string }
   | { state: "error"; message: string }
   | { state: "success"; message: string };
+
+const ASSET_SOURCE_OPTIONS: readonly ResourcePickerOption[] = [
+  {
+    value: "account_holdings",
+    label: "Latest account holdings",
+    subtitle: "Use the newest stored account holdings snapshot from the trailing 30 days.",
+  },
+  {
+    value: "universe",
+    label: "Universe assets",
+    subtitle: "Resolve assets from the selected active Universe when the bars update runs.",
+  },
+  {
+    value: "assets",
+    label: "Explicit assets",
+    subtitle: "Use an explicit set of registered Main Sequence Asset UIDs.",
+  },
+];
 
 function formatError(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") return "Request cancelled.";
@@ -72,7 +92,7 @@ function createResourceHttpClient(transport: ApiTransport): ResourceHttpClient {
 function formatAssetSource(source: BarConfigurationAssetSource): string {
   const labels: Record<BarConfigurationAssetSource, string> = {
     assets: "Explicit assets",
-    universe: "Registered universe",
+    universe: "Universe assets",
     account_holdings: "Latest account holdings",
   };
   return labels[source];
@@ -209,6 +229,49 @@ function profileParts(profile: string): [string, string, string] | null {
   return [frequencyId, feed, adjustment];
 }
 
+function profilePickerOption(profile: string): ResourcePickerOption {
+  const parts = profileParts(profile);
+  if (!parts) {
+    return {
+      value: profile,
+      label: profile,
+      subtitle: "Existing migrated Bars profile.",
+    };
+  }
+
+  const [frequencyId, feed, adjustment] = parts;
+  const frequencyLabel = frequencyId === "1d" ? "Daily" : frequencyId;
+  const frequencyDescription = frequencyId === "1d" ? "1-day bars" : `${frequencyId} bars`;
+  const feedLabel = feed.toUpperCase();
+  const feedDescription = feed === "sip"
+    ? "the consolidated SIP feed"
+    : feed === "iex"
+      ? "the IEX exchange feed"
+      : `the ${feedLabel} feed`;
+  const adjustmentLabel = adjustment === "all"
+    ? "Adjusted (all corporate actions)"
+    : adjustment === "raw"
+      ? "Raw (unadjusted)"
+      : adjustment === "split"
+        ? "Split-adjusted"
+        : adjustment === "dividend"
+          ? "Dividend-adjusted"
+          : adjustment;
+  const adjustmentDescription = adjustment === "all"
+    ? "prices are adjusted for all corporate actions"
+    : adjustment === "raw"
+      ? "prices are not adjusted for corporate actions"
+      : `prices use Alpaca's ${adjustment} adjustment`;
+
+  return {
+    value: profile,
+    label: `${frequencyLabel} · ${feedLabel} · ${adjustmentLabel}`,
+    subtitle: `${frequencyDescription} from ${feedDescription}; ${adjustmentDescription}.`,
+    meta: profile,
+    keywords: [frequencyId, feed, adjustment],
+  };
+}
+
 export function BarsConfigurationsPage({
   transport,
   configuration,
@@ -271,10 +334,16 @@ export function BarsConfigurationsPage({
   }, [profile, profiles]);
 
   const activeUniverses = universes.filter((universe) => universe.is_active);
-  const profileOptions = Array.from(new Set([
+  const activeUniverseOptions: readonly ResourcePickerOption[] = activeUniverses.map((universe) => ({
+    value: universe.uid,
+    label: universe.display_name,
+    subtitle: universe.symbol,
+    meta: universe.uid,
+  }));
+  const profileOptions: readonly ResourcePickerOption[] = Array.from(new Set([
     ...profiles,
     ...(profile ? [profile] : []),
-  ]));
+  ])).map(profilePickerOption);
   const busy = mutation.state === "loading";
   const sourceIsValid = assetSource === "account_holdings"
     || (assetSource === "universe" && Boolean(universeUid))
@@ -385,7 +454,7 @@ export function BarsConfigurationsPage({
   }
 
   return (
-    <ApplicationPage as="main" maxWidth="content">
+    <ApplicationPage as="main" maxWidth="full">
       <ApplicationPageStack>
         <ApplicationPageHeader
           eyebrow="Market Data"
@@ -427,40 +496,52 @@ export function BarsConfigurationsPage({
                   disabled={busy}
                 />
               </label>
-              <label className="field">Asset source
-                <select
-                  value={assetSource}
-                  onChange={(event) => setAssetSource(event.target.value as BarConfigurationAssetSource)}
+              <div className="field resource-picker-field">
+                <label id="bars-asset-source-label">Asset source</label>
+                <ResourcePicker
+                  ariaLabelledBy="bars-asset-source-label"
                   disabled={busy}
-                >
-                  <option value="account_holdings">Latest account holdings</option>
-                  <option value="universe">Registered universe</option>
-                  <option value="assets">Explicit assets</option>
-                </select>
-              </label>
-              <label className="field">Migrated bars profile
-                <select value={profile} onChange={(event) => setProfile(event.target.value)} disabled={busy}>
-                  <option value="">{profileOptions.length ? "Select a profile" : "No migrated profiles"}</option>
-                  {profileOptions.map((profileOption) => (
-                    <option key={profileOption} value={profileOption}>{profileOption}</option>
-                  ))}
-                </select>
-              </label>
+                  emptyMessage="No asset sources are available."
+                  fullWidth
+                  mode="single"
+                  onValueChange={(value) => setAssetSource(value as BarConfigurationAssetSource)}
+                  options={ASSET_SOURCE_OPTIONS}
+                  placeholder="Select an asset source"
+                  value={assetSource}
+                />
+              </div>
+              <div className="field resource-picker-field">
+                <label id="bars-profile-label">Migrated Bars profile</label>
+                <ResourcePicker
+                  ariaLabelledBy="bars-profile-label"
+                  disabled={busy}
+                  emptyMessage="No migrated Bars profiles."
+                  fullWidth
+                  mode="single"
+                  onValueChange={setProfile}
+                  options={profileOptions}
+                  placeholder="Select a migrated Bars profile"
+                  value={profile || null}
+                />
+              </div>
               {assetSource === "universe" ? (
-                <label className="field field--wide">Active universe
-                  <select
-                    value={universeUid}
-                    onChange={(event) => setUniverseUid(event.target.value)}
+                <div className="field field--wide resource-picker-field">
+                  <label id="bars-universe-label">Active Universe</label>
+                  <ResourcePicker
+                    ariaLabelledBy="bars-universe-label"
                     disabled={busy || dependenciesLoading}
-                  >
-                    <option value="">{activeUniverses.length ? "Select a universe" : "No active universes"}</option>
-                    {activeUniverses.map((universe) => (
-                      <option key={universe.uid} value={universe.uid}>
-                        {universe.display_name} — {universe.uid}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    emptyMessage="No active Universes."
+                    fullWidth
+                    loading={dependenciesLoading}
+                    mode="single"
+                    onValueChange={setUniverseUid}
+                    options={activeUniverseOptions}
+                    placeholder="Select the Universe whose assets will be updated"
+                    searchable
+                    searchPlaceholder="Search active Universes"
+                    value={universeUid || null}
+                  />
+                </div>
               ) : null}
               {assetSource === "assets" ? (
                 <label className="field field--wide">Registered Asset UIDs <span>Comma, space, or line separated</span>
@@ -499,28 +580,35 @@ export function BarsConfigurationsPage({
             </div>
             <div className="workflow-guidance">
               <Info aria-hidden="true" size={18} />
-              <p>
-                This stores configuration only. <strong>Latest account holdings</strong> resolves the newest persisted snapshot from the trailing 30 days and never captures holdings as a side effect. The selected profile must already be migrated.
-              </p>
+              {assetSource === "universe" ? (
+                <p>
+                  This stores configuration only. <strong>Universe assets</strong> resolves the selected Universe&apos;s current materialized Asset Category members when the bars update runs. It does not extract or refresh the Universe. The selected profile must already be migrated.
+                </p>
+              ) : assetSource === "assets" ? (
+                <p>
+                  This stores configuration only. <strong>Explicit assets</strong> uses exactly the registered Main Sequence Asset UIDs entered above. The selected profile must already be migrated.
+                </p>
+              ) : (
+                <p>
+                  This stores configuration only. <strong>Latest account holdings</strong> resolves the newest persisted snapshot from the trailing 30 days and never captures holdings as a side effect. The selected profile must already be migrated.
+                </p>
+              )}
             </div>
           </form>
         </ApplicationCard>
 
         {mutation.state === "loading" ? (
-          <ApplicationStatusScreen
-            as="section"
-            state="loading"
+          <RequestProgressDialog
+            open
             title={mutation.label}
             message="Waiting for the Alpaca Connectors API."
-            variant="contained"
           />
         ) : mutation.state === "error" ? (
-          <ApplicationStatusScreen
-            as="section"
-            state="error"
-            title="Configuration request failed"
+          <RequestErrorDialog
+            open
+            title="Bars configuration request failed"
             message={mutation.message}
-            variant="contained"
+            onClose={() => setMutation({ state: "idle" })}
           />
         ) : mutation.state === "success" ? (
           <section className="action-result" aria-live="polite">

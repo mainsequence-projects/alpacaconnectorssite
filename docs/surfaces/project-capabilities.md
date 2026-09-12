@@ -18,7 +18,8 @@ The project can:
 
 ## What the site exposes
 
-The current site deliberately exposes six interactive workflows:
+The current site deliberately exposes seven interactive workflows. ETF Weight Signals, Rebalance
+Configurations, and ETF Portfolios are grouped together under **Portfolios**:
 
 | Site page | Interactive behavior |
 | --- | --- |
@@ -26,8 +27,9 @@ The current site deliberately exposes six interactive workflows:
 | Accounts | Create, inspect, update, and delete Alpaca registrations using Secret names |
 | Universes | Create explicit Asset Universe registrations and Run extraction, constituent registration, and membership refresh |
 | Bars | Create, inspect, edit, and delete stored Alpaca bars configurations |
-| Signals | Create, inspect, edit, run, enable or disable scheduling, and delete dedicated signal Job configurations |
-| ETF Portfolios | Create, inspect, edit, run, and delete durable portfolio configurations and their dedicated Jobs; manage reusable ImmediateSignal rebalance configurations |
+| ETF Weight Signals | Create, inspect, edit, run, enable or disable scheduling, and delete dedicated signal Job configurations |
+| Rebalance Configurations | Create, inspect, edit, and delete reusable rebalance policies; Phase 1 offers ImmediateSignal |
+| ETF Portfolios | Create, inspect, edit, run, and delete durable portfolio configurations and their dedicated Jobs |
 
 Holdings snapshots, market-data observations, and other repository capabilities are not implied to
 be site pages. They remain available through the repository surfaces that actually implement them,

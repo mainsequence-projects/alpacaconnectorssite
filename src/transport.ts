@@ -16,7 +16,7 @@ import { readApiResponse, type ApiTransport } from "./api";
 const CHANNEL = "mainsequence.alpaca-connectors" as const;
 const FASTAPI_RELEASE_UID = import.meta.env.VITE_FASTAPI_RESOURCE_RELEASE_UID?.trim();
 const COMMAND_CENTER_ORIGIN = import.meta.env.VITE_COMMAND_CENTER_ORIGIN?.trim();
-const LOCAL_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8001";
+const LOCAL_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8321";
 
 export type ApplicationTransportStatus = StaticSiteFastApiTransportStatus | "local" | "starting";
 
@@ -137,4 +137,3 @@ export function useAlpacaApiTransport(): ApplicationTransportState {
     [context, error, status, transport],
   );
 }
-

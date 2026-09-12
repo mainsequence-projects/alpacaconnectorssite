@@ -6,16 +6,29 @@ definition; it does not resolve assets, capture holdings, or publish bars.
 Every configuration requires:
 
 - a name and registered Alpaca account;
-- exactly one asset source: latest account holdings, an active registered universe, or explicit
+- exactly one asset source: latest account holdings, assets from an active Universe, or explicit
   registered Asset UIDs;
 - one migrated `frequency/feed/adjustment` profile; and
 - an enabled or disabled status.
+
+The profile picker describes every dimension rather than exposing only its storage key. The
+currently migrated profiles are:
+
+- **Daily · IEX · Raw (unadjusted)** (`1d/iex/raw`): one-day bars from the IEX exchange feed,
+  without corporate-action adjustment.
+- **Daily · SIP · Adjusted (all corporate actions)** (`1d/sip/all`): one-day bars from the
+  consolidated SIP feed, adjusted for all corporate actions.
+
+`all` is the adjusted profile; it is not a missing fourth field. Other adjustment modes supported
+by Alpaca are not selectable until their exact `frequency/feed/adjustment` storage profile has
+been migrated.
 
 For **Latest account holdings**, resolution uses the newest persisted holdings snapshot in the
 inclusive trailing 30-day window. It does not capture a fresh snapshot as a side effect. Capture
 holdings separately when a newer snapshot is required.
 
-For **Registered universe**, the form lists active universes. For **Explicit assets**, enter Main
+For **Universe assets**, the form lists active Universes and resolves their materialized Asset
+Category members when the update runs. For **Explicit assets**, enter Main
 Sequence Asset UIDs separated by commas, spaces, or lines. The API validates the selected account,
 universe, assets, and migrated profile when the configuration is saved.
 

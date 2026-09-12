@@ -24,7 +24,9 @@ test("opens Assets in the SDK navigation shell and conforms at Command Center vi
   await expect(page.getByRole("link", { name: /^Accounts/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^Universes/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^Bars/ })).toBeVisible();
-  await expect(page.getByRole("link", { name: /^ETF Weight Signal/ })).toBeVisible();
+  await expect(navigation.getByText("Portfolios", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: /^ETF Weight Signals/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /^Rebalance Configurations/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^ETF Portfolios/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^Documentation/ })).toBeVisible();
   await assertCommandCenterPageLayout(page);
@@ -267,27 +269,61 @@ test("loads a Universe detail and reuses the Assets list only after row activati
 });
 
 test("creates, reads, updates, and deletes a bars configuration", async ({ page }) => {
+  let createPayload: Record<string, unknown> | null = null;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname === "/v1/market-data/bar-configurations") {
+      createPayload = request.postDataJSON() as Record<string, unknown>;
+    }
+  });
+
   await page.goto("/bars");
   await expect(page.getByRole("heading", { level: 1, name: "Bars configurations" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Create bars configuration" })).toBeVisible();
   await expect(page.getByRole("row", { name: /Daily paper holdings/ })).toBeVisible();
 
-  await page.getByLabel("Name").fill("Daily selected holdings");
+  await page.getByLabel("Name").fill("Daily universe assets");
   await page.getByLabel("Registered Alpaca account").selectOption("account-paper");
-  await page.getByLabel("Asset source").selectOption("account_holdings");
-  await page.getByLabel("Migrated bars profile").selectOption("1d/sip/all");
+  await page.getByRole("button", { name: "Asset source" }).click();
+  await expect(page.getByRole("option", { name: /Latest account holdings/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /Universe assets/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /Explicit assets/ })).toBeVisible();
+  await page.getByRole("option", { name: /Universe assets/ }).click();
+  await expect(page.getByText("current materialized Asset Category members", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Active Universe" }).click();
+  await page.getByRole("option", { name: /S&P 500 holdings/ }).click();
+  await page.getByRole("button", { name: "Migrated Bars profile" }).click();
+  await expect(page.getByRole("option", { name: /Daily · IEX · Raw \(unadjusted\)/ })).toContainText(
+    "prices are not adjusted for corporate actions",
+  );
+  await expect(page.getByRole("option", { name: /Daily · SIP · Adjusted \(all corporate actions\)/ })).toContainText(
+    "prices are adjusted for all corporate actions",
+  );
+  await page.getByRole("option", { name: /Daily · SIP · Adjusted \(all corporate actions\)/ }).click();
+  await expect(page.getByRole("button", { name: "Migrated Bars profile" })).toContainText(
+    "Adjusted (all corporate actions)",
+  );
   await page.getByRole("button", { name: "Create configuration" }).click();
-  await expect(page.getByRole("heading", { name: "Created Daily selected holdings." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Created Daily universe assets." })).toBeVisible();
+  expect(createPayload).toMatchObject({
+    account_uid: "account-paper",
+    asset_source: "universe",
+    asset_uids: [],
+    universe_uid: "universe-ivv",
+    frequency_id: "1d",
+    feed: "sip",
+    adjustment: "all",
+  });
 
-  let createdRow = page.getByRole("row", { name: /Daily selected holdings/ });
-  await expect(createdRow).toContainText("Latest account holdings");
+  let createdRow = page.getByRole("row", { name: /Daily universe assets/ });
+  await expect(createdRow).toContainText("Universe assets");
   await createdRow.getByRole("button", { name: "Edit" }).click();
   await expect(page.getByRole("heading", { name: "Edit bars configuration" })).toBeVisible();
-  await page.getByLabel("Name").fill("Daily selected holdings updated");
+  await page.getByLabel("Name").fill("Daily universe assets updated");
   await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByRole("heading", { name: "Updated Daily selected holdings updated." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Updated Daily universe assets updated." })).toBeVisible();
 
-  createdRow = page.getByRole("row", { name: /Daily selected holdings updated/ });
+  createdRow = page.getByRole("row", { name: /Daily universe assets updated/ });
   await createdRow.getByRole("button", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete bars configuration" });
   await dialog.getByLabel("Confirmation word").fill("DELETE");
@@ -295,9 +331,38 @@ test("creates, reads, updates, and deletes a bars configuration", async ({ page 
   await expect(createdRow).toHaveCount(0);
 });
 
+test("shows bars request failures in a dismissible modal", async ({ page }) => {
+  await page.route("**/v1/market-data/bar-configurations", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      json: { detail: "Bars configuration response validation failed." },
+    });
+  });
+
+  await page.goto("/bars");
+  await page.getByLabel("Name").fill("Broken bars request");
+  await page.getByRole("button", { name: "Create configuration" }).click();
+
+  const errorDialog = page.getByRole("dialog", {
+    name: "Bars configuration request failed",
+  });
+  await expect(errorDialog).toBeVisible();
+  await expect(errorDialog).toContainText(
+    "Bars configuration response validation failed.",
+  );
+  await errorDialog.getByRole("button", { name: "Dismiss" }).click();
+  await expect(errorDialog).toHaveCount(0);
+});
+
 test("creates one dedicated Job configuration per ETF signal and manages its lifecycle", async ({ page }) => {
   await page.goto("/signals");
-  await expect(page.getByRole("heading", { level: 1, name: "ETF Signals" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "ETF Weight Signals" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "ETF Weight Signals" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Create signal" })).toHaveCount(0);
   await expect(page.getByRole("row", { name: /Daily IVV observation/ })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Schedule" })).toBeVisible();
@@ -308,10 +373,12 @@ test("creates one dedicated Job configuration per ETF signal and manages its lif
   await expect(page.getByRole("heading", { name: "Create signal" })).toBeVisible();
   await expect(form.getByLabel("Environment")).toHaveCount(0);
   await form.getByLabel("Scheduling method").selectOption("crontab");
+  await form.getByLabel("Timezone").selectOption("UTC");
   await form.getByLabel("Calendar pattern").selectOption("weekly");
   await form.getByLabel("Schedule time", { exact: true }).fill("14:35");
   await form.getByLabel("Day of week").selectOption("3");
-  await expect(form.getByText("Every Wednesday at 14:35", { exact: true })).toBeVisible();
+  await expect(form.getByLabel("Timezone")).toHaveValue("UTC");
+  await expect(form.getByText("Every Wednesday at 14:35 (UTC)", { exact: true })).toBeVisible();
   await expect(form.getByText("35 14 * * 3", { exact: true })).toBeVisible();
   await form.getByLabel("Calendar pattern").selectOption("advanced");
   await form.getByLabel("Five-field crontab").fill("*/15 9-16 * * 1-5");
@@ -383,6 +450,49 @@ test("loads and transposes the latest signal observations only after signal sele
   await expect(page.getByRole("row", { name: /Daily IVV observation/ })).toBeVisible();
 });
 
+test("loads resolved portfolio details and value history only after portfolio selection", async ({ page }) => {
+  const detailRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname === "/v1/portfolio-configurations/portfolio-config-existing") {
+      detailRequests.push(request.url());
+    }
+  });
+
+  await page.goto("/portfolios");
+  const row = page.getByRole("row", { name: /Daily IVV analytical portfolio/ });
+  await expect(row).toBeVisible();
+  expect(detailRequests).toHaveLength(0);
+
+  await row.click();
+
+  await expect(page.getByRole("heading", { name: "Daily IVV analytical portfolio" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Historical performance" })).toBeVisible();
+  await expect(page.locator("[data-portfolio-value-chart]")).toBeVisible();
+  await expect(page.getByText("101.40", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Total return", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("1.40%", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Maximum drawdown", { exact: true })).toBeVisible();
+  await expect(page.getByText("Calculated by Empyrical", { exact: false })).toBeVisible();
+  await expect(page.getByText("alpha and beta are not reported", { exact: false })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Portfolio construction" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Valuation source" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Execution and calendar" })).toBeVisible();
+  await expect(page.getByText("Daily IVV observation", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("iShares Core S&P 500 ETF (IVV)", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Daily paper holdings", { exact: true }).first()).toBeVisible();
+  await page.locator("details").filter({ hasText: "Execution and calendar" }).locator("summary").click();
+  await expect(page.getByText("NYSE trading calendar · exchange_calendar", { exact: true })).toBeVisible();
+  await expect(page.getByText("Portfolio UID", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Signal UID", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("portfolio-existing", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("signal-universe-ivv", { exact: true })).toHaveCount(0);
+
+  expect(detailRequests).toHaveLength(1);
+  const requestUrl = new URL(detailRequests[0]);
+  expect(requestUrl.searchParams.get("observation_limit")).toBe("2500");
+});
+
 test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration", async ({ page }) => {
   let createPayload: Record<string, unknown> | null = null;
   page.on("request", (request) => {
@@ -404,9 +514,15 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
   await expect(form.getByText("persistent daily InterpolatedPrices", { exact: false })).toBeVisible();
   await expect(form.getByRole("checkbox", { name: "Extend latest valuation prices to now" })).toBeVisible();
   await expect(form.getByText("does not write synthetic InterpolatedPrices rows", { exact: false })).toBeVisible();
+  await expect(form.getByText("the last price is $100 on January 1", { exact: false })).toBeVisible();
   await expect(form.getByRole("checkbox", { name: "Stop when a required asset has no price" })).toBeVisible();
+  await expect(form.getByText("there is nothing to carry forward", { exact: false })).toBeVisible();
+  await expect(form.getByText("the run may still fail", { exact: false })).toBeVisible();
   await expect(form.getByText("Independent policies:", { exact: false })).toBeVisible();
   await expect(form.getByLabel("Portfolio calculation notes")).toBeVisible();
+  const commissionInput = form.getByLabel("Commission fee (%)");
+  await expect(commissionInput).toHaveValue("0.018");
+  await expect(form.getByText("0.018% is stored and submitted as 0.00018", { exact: false })).toBeVisible();
   await expect(form.locator(".workflow-form-section").last()).toContainText("Job resources");
   await expect(form.locator(".workflow-form-section + .workflow-guidance")).toBeVisible();
   await form.getByLabel("Portfolio name").fill("Daily observed IVV portfolio");
@@ -416,9 +532,12 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
   await page.getByRole("option", { name: /Daily paper holdings/ }).click();
   await form.getByRole("button", { name: "Rebalance Configuration" }).click();
   await page.getByRole("option", { name: /Immediate observed weights/ }).click();
+  await commissionInput.fill("0.025");
   await form.getByLabel("Scheduling method").selectOption("crontab");
+  await form.getByLabel("Timezone").selectOption("UTC");
   await form.getByLabel("Calendar pattern").selectOption("weekdays");
-  await form.getByLabel("Schedule time").fill("09:15");
+  await form.getByLabel("Schedule time", { exact: true }).fill("09:15");
+  await expect(form.getByLabel("Timezone")).toHaveValue("UTC");
   await expect(form.getByText("15 9 * * 1-5", { exact: true })).toBeVisible();
   await form.getByRole("button", { name: "Create portfolio", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Created Daily observed IVV portfolio." })).toBeVisible();
@@ -432,9 +551,11 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
     rebalance_configuration_uid: "rebalance-immediate",
     upsample_frequency_id: "1d",
     intraday_bar_interpolation_rule: "ffill",
+    commission_fee: 0.00025,
     job: {
       schedule_type: "crontab",
       schedule_expression: "15 9 * * 1-5",
+      schedule_timezone: "UTC",
     },
   });
 
@@ -456,6 +577,79 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(createdRow).toHaveCount(0);
+});
+
+test("creates a reusable rebalance configuration from its own portfolio application", async ({ page }) => {
+  let createPayload: Record<string, unknown> | null = null;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname === "/v1/portfolio-rebalance-configurations") {
+      createPayload = request.postDataJSON() as Record<string, unknown>;
+    }
+  });
+
+  await page.goto("/rebalance-configurations");
+  await expect(page.getByRole("heading", { level: 1, name: "Rebalance Configurations" })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Immediate observed weights/ })).toBeVisible();
+
+  await page.getByRole("button", { name: "Create rebalance configuration", exact: true }).click();
+  const form = page.locator("form.workflow-form");
+  await form.getByLabel("Name").fill("Immediate ETF observations");
+  await form.getByLabel("Description Optional").fill("Apply each observed ETF weight frame immediately.");
+  await form.getByRole("button", { name: "Strategy" }).click();
+  await page.getByRole("option", { name: /Immediate Signal/ }).click();
+  await form.getByRole("button", { name: "Create configuration", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "Created Immediate ETF observations." })).toBeVisible();
+  expect(createPayload).toEqual({
+    name: "Immediate ETF observations",
+    description: "Apply each observed ETF weight frame immediately.",
+    strategy: "immediate_signal",
+  });
+  await expect(page.getByRole("row", { name: /Immediate ETF observations/ })).toContainText("ImmediateSignal");
+});
+
+test("shows rebalance request progress in a modal and labels failures accurately", async ({ page }) => {
+  let releaseRequest: () => void = () => undefined;
+  const requestGate = new Promise<void>((resolve) => {
+    releaseRequest = resolve;
+  });
+
+  await page.route("**/v1/portfolio-rebalance-configurations", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+
+    await requestGate;
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      json: { detail: "The operation could not be completed by a required service." },
+    });
+  });
+
+  await page.goto("/rebalance-configurations");
+  await expect(page.getByRole("row", { name: /Immediate observed weights/ })).toBeVisible();
+  await page.getByRole("button", { name: "Create rebalance configuration", exact: true }).click();
+  const form = page.locator("form.workflow-form");
+  await form.getByLabel("Name").fill("Delayed rebalance request");
+  await form.getByRole("button", { name: "Create configuration", exact: true }).click();
+
+  const progressDialog = page.getByRole("dialog", { name: "Creating rebalance configuration" });
+  await expect(progressDialog).toBeVisible();
+  await expect(progressDialog.locator("[data-cc-activity-indicator]")).toBeVisible();
+  await expect(page.getByRole("row", { name: /Immediate observed weights/ })).toBeVisible();
+
+  releaseRequest();
+
+  await expect(progressDialog).toHaveCount(0);
+  const errorDialog = page.getByRole("dialog", {
+    name: "Rebalance configuration request failed",
+  });
+  await expect(errorDialog).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Portfolio request failed" })).toHaveCount(0);
+  await expect(errorDialog.getByText("The operation could not be completed by a required service.", { exact: true })).toBeVisible();
 });
 
 test("uses delegated FastAPI credentials and applies host theme updates", async ({ page }) => {

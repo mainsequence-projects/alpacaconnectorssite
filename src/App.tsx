@@ -13,7 +13,7 @@ import {
   ResourcePicker,
   type ResourcePickerOption,
 } from "@dev-mainsequence/command-center-sdk/views";
-import { Activity, BookOpen, BriefcaseBusiness, ChartCandlestick, Info, Landmark, Layers3, PackageSearch } from "lucide-react";
+import { Activity, BookOpen, BriefcaseBusiness, ChartCandlestick, Info, Landmark, Layers3, PackageSearch, Repeat2 } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -38,10 +38,11 @@ import { AccountsPage } from "./accounts";
 import { AssetResourceList } from "./assetResource";
 import { BarsConfigurationsPage } from "./barConfigurations";
 import { PortfoliosPage } from "./portfolios";
+import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
 import { SignalsPage } from "./signals";
 import { UniverseResourceList } from "./universeResource";
 
-type RouteId = "assets" | "accounts" | "universes" | "bars" | "signals" | "portfolios";
+type RouteId = "assets" | "accounts" | "universes" | "bars" | "signals" | "rebalances" | "portfolios";
 const ASSET_OPERATION_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 type ActionState<T> =
   | { state: "idle" }
@@ -55,6 +56,7 @@ const ROUTE_PATHS: Record<RouteId, string> = {
   universes: "/universes",
   bars: "/bars",
   signals: "/signals",
+  rebalances: "/rebalance-configurations",
   portfolios: "/portfolios",
 };
 
@@ -96,12 +98,25 @@ const NAVIGATION: NavigationApplicationDefinition = {
           icon: ChartCandlestick,
           description: "Manage reusable market-data configurations",
         },
+      ],
+    },
+    {
+      id: "portfolios",
+      label: "Portfolios",
+      destinations: [
         {
           id: "signals",
-          label: "ETF Weight Signal",
+          label: "ETF Weight Signals",
           href: "/signals",
           icon: Activity,
           description: "Schedule Universe-backed ETF signals",
+        },
+        {
+          id: "rebalances",
+          label: "Rebalance Configurations",
+          href: "/rebalance-configurations",
+          icon: Repeat2,
+          description: "Define reusable portfolio rebalance policies",
         },
         {
           id: "portfolios",
@@ -133,6 +148,7 @@ function routeFromPath(pathname: string): RouteId {
   if (pathname.startsWith("/universes")) return "universes";
   if (pathname.startsWith("/bars")) return "bars";
   if (pathname.startsWith("/signals")) return "signals";
+  if (pathname.startsWith("/rebalance-configurations")) return "rebalances";
   if (pathname.startsWith("/portfolios")) return "portfolios";
   return "assets";
 }
@@ -290,27 +306,32 @@ function waitForPoll(delayMs: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function ActionResult({ action }: { action: ActionState<unknown> }) {
+function ActionResult({
+  action,
+  errorTitle,
+  onDismissError,
+}: {
+  action: ActionState<unknown>;
+  errorTitle: string;
+  onDismissError: () => void;
+}) {
   if (action.state === "idle") return null;
   if (action.state === "loading") {
     return (
-      <ApplicationStatusScreen
-        as="section"
-        state="loading"
+      <RequestProgressDialog
+        open
         title={action.label}
         message="Waiting for the Alpaca Connectors API."
-        variant="contained"
       />
     );
   }
   if (action.state === "error") {
     return (
-      <ApplicationStatusScreen
-        as="section"
-        state="error"
-        title="Request failed"
+      <RequestErrorDialog
+        open
+        title={errorTitle}
         message={action.message}
-        variant="contained"
+        onClose={onDismissError}
       />
     );
   }
@@ -449,7 +470,7 @@ function AssetsPage({ transport }: { transport: ApiTransport }) {
     : null;
 
   return (
-    <ApplicationPage as="main" maxWidth="content">
+    <ApplicationPage as="main" maxWidth="full">
       <ApplicationPageStack>
         <ApplicationPageHeader
           eyebrow="Assets"
@@ -516,7 +537,13 @@ function AssetsPage({ transport }: { transport: ApiTransport }) {
           </ApplicationCard>
         ) : null}
         {operation ? <RegistrationProgress operation={operation} /> : null}
-        {action.state !== "loading" || !operation ? <ActionResult action={action} /> : null}
+        {action.state !== "loading" || !operation ? (
+          <ActionResult
+            action={action}
+            errorTitle="Asset registration request failed"
+            onDismissError={() => setAction({ state: "idle" })}
+          />
+        ) : null}
         <AssetResourceList transport={transport} refreshKey={assetRefreshKey} />
       </ApplicationPageStack>
     </ApplicationPage>
@@ -556,7 +583,7 @@ function UniversesPage({ transport }: { transport: ApiTransport }) {
   }
 
   return (
-    <ApplicationPage as="main" maxWidth="content">
+    <ApplicationPage as="main" maxWidth="full">
       <ApplicationPageStack>
         <ApplicationPageHeader
           eyebrow="Universes"
@@ -612,7 +639,11 @@ function UniversesPage({ transport }: { transport: ApiTransport }) {
             <p>Created {action.result.display_name} with Universe UID {action.result.uid}, Source UID {action.result.source_uid}, and Asset Category UID {action.result.asset_category_uid}. It has zero assets until component extraction succeeds.</p>
           </section>
         ) : (
-          <ActionResult action={action} />
+          <ActionResult
+            action={action}
+            errorTitle="Universe request failed"
+            onDismissError={() => setAction({ state: "idle" })}
+          />
         )}
         <UniverseResourceList transport={transport} refreshKey={universeRefreshKey} />
       </ApplicationPageStack>
@@ -683,7 +714,7 @@ export default function App() {
       />
       <div className="cc-application-navigation-shell__content application-content">
         {terminalTransportError || (!transportState.transport && transportState.status !== "starting") ? (
-          <ApplicationPage as="main" maxWidth="content">
+          <ApplicationPage as="main" maxWidth="full">
             <ApplicationStatusScreen
               state="error"
               title="Application unavailable"
@@ -691,7 +722,7 @@ export default function App() {
             />
           </ApplicationPage>
         ) : !transportState.transport ? (
-          <ApplicationPage as="main" maxWidth="content">
+          <ApplicationPage as="main" maxWidth="full">
             <ApplicationStatusScreen
               state="loading"
               title="Starting Alpaca Connectors"
@@ -699,7 +730,7 @@ export default function App() {
             />
           </ApplicationPage>
         ) : (route === "assets" || route === "bars") && !configurationError && (configurationLoading || !configuration) ? (
-          <ApplicationPage as="main" maxWidth="content">
+          <ApplicationPage as="main" maxWidth="full">
             <ApplicationStatusScreen
               state="loading"
               title="Loading application configuration"
@@ -707,7 +738,7 @@ export default function App() {
             />
           </ApplicationPage>
         ) : (route === "assets" || route === "bars") && configurationError ? (
-          <ApplicationPage as="main" maxWidth="content">
+          <ApplicationPage as="main" maxWidth="full">
             <ApplicationStatusScreen
               state="error"
               title="Application configuration unavailable"
@@ -726,8 +757,10 @@ export default function App() {
           />
         ) : route === "signals" ? (
           <SignalsPage transport={transportState.transport} />
+        ) : route === "rebalances" ? (
+          <PortfoliosPage key="rebalances" transport={transportState.transport} section="rebalances" />
         ) : route === "portfolios" ? (
-          <PortfoliosPage transport={transportState.transport} />
+          <PortfoliosPage key="portfolios" transport={transportState.transport} />
         ) : (
           <UniversesPage transport={transportState.transport} />
         )}

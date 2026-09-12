@@ -38,9 +38,19 @@ operation when a different rollback history is required. The value is a
 positive integer, defaults to `3`, and belongs to the release, not
 `automatic_redeployment_policy`. Existing widget, workspace, active, desired,
 and live-run references remain protected. Revision candidate discovery is
-report-only until the approved Command Center maintenance and static-policy
-cutover exists; do not imply that editing the count synchronously deletes
-provider artifacts.
+asynchronous: successful runtime activation and a retention edit enqueue
+backend reconciliation after commit, and a periodic database sweep recovers
+lost Celery wake-ups. Editing the count does not synchronously delete provider
+artifacts. Static-site and widget-extension cleanup remain blocked until their
+target adapters exist.
+
+Every retained runtime revision pins its exact `CodeRepositoryJobImage`, not
+only the active or desired revision. Before deleting an apparently unused
+image, inspect its release-revision provenance; remove the owning revision only
+through the canonical retention lifecycle, never by bypassing image protection.
+Runtime retention then submits the former image to canonical guarded deletion;
+the image and registry artifact are deleted only when no other canonical
+dependency uses them.
 
 For image-backed deployment, the parent `DeploymentRun` owns role-specific
 `DeploymentRunImageDependency` relations and `CodeRepositoryImageBuildRun` owns the
@@ -145,7 +155,7 @@ Center SDK skills own frontend implementation.
 
 ## Prepare Widget-Extension Inputs
 
-For `widget_extension`, supply only `code_repository_branch_uid`, `name`, and optional
+For `widget_extension`, supply only `code_repository_branch_uid`, `name`, required `entrypoint`, and optional
 repository-relative `root_directory`. Do not supply `extension_id`, a
 CodeRepositoryResource or image UID, build/runtime settings, environment, secrets,
 publication version, or an automatic-deployment policy. Automatic deployment
@@ -155,6 +165,14 @@ The release UID identifies the backend release. Manifest `id` and SemVer are
 validated immutable build outputs, not release fields. Every build attempt uses
 the existing `ResourceReleaseRun`; successful publications are historical
 versions, not deployment attempts or a second deployment model.
+
+Widget consumers use the canonical DRF revision/dependency and nested publication
+bundle routes documented in `docs/command_center/widgets.md`. Pin exact registered
+revision UIDs; a release's active pointer or latest version is not a workspace
+dependency. Bundle access rechecks current release and Environment visibility and
+verifies the entire Artifact hash, including conditional reads. Public links pin
+their own protected snapshot and dependency plan. Do not invent a parallel MCP
+widget registry or new MCP tool names for these DRF-only consumption actions.
 
 ## Configure Automatic Redeployment
 
@@ -190,7 +208,7 @@ Call `resource_release.create` once with the exact discriminated request:
 - runtime kinds use `resource_uid` and `related_image_uid`;
 - `static_site` uses `code_repository_branch_uid`, `name`, and only currently
   advertised static configuration; or
-- `widget_extension` uses `code_repository_branch_uid`, `name`, and optional
+- `widget_extension` uses `code_repository_branch_uid`, `name`, required `entrypoint`, and optional
   `root_directory`.
 
 Creation uses the canonical authorization, credit, validation, persistence,
@@ -455,6 +473,23 @@ started; waiting for image/provider work leaves the build step `running`; after
 a failure, later prevented steps are `skipped` with
 `outcome=run_terminated`. Inspect the failed step's `error` before the root
 error when explaining where execution stopped.
+
+Read image-lifecycle cost from the run's `billing` object. Its scope is exactly
+`image_lifecycle`: it may include an attributed image build, registry storage,
+and registry service, but it is not the release's runtime-compute total. A
+deployment that reuses an existing image has zero incremental image-build cost;
+do not copy the producer build's charge onto the consumer. `pending` with a
+null total means asynchronous pricing or persisted allocation is incomplete.
+Do not interpret a priced terminal zero as missing work, and do not infer or
+request internal provider, rate, allocation-evidence, or diagnostic fields.
+
+Read persisted Knative runtime attribution from `runtime_billing`, whose scope
+is exactly `knative_runtime`. Read the combined available amount from
+`cost_summary`; `is_complete=false` means an activation remains live or at
+least one constituent cost remains unpriced, so the total must not be presented
+as final. A priced live amount is the current persisted cost, not a forecast.
+Priced amounts are JSON numbers with up to six decimal places, while unresolved
+amounts are null. These reads never materialize or refresh billing state.
 
 The current MCP catalog exposes run list and detail but no log-read tool. A
 logs URL in the run projection does not authorize a generic endpoint call.

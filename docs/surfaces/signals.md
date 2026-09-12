@@ -1,6 +1,6 @@
 # Signals
 
-The Signals page creates and operates scheduled Universe-backed ETF signal Jobs. The default view
+The ETF Weight Signals application creates and operates scheduled Universe-backed ETF signal Jobs. The default view
 is the signal list; select **Create signal** to open the form.
 
 Each configuration selects:
@@ -21,9 +21,10 @@ internally, so the GUI never asks the user to select or submit one.
 
 For calendar schedules, the form generates the five-field crontab from daily, weekday, weekly, or
 monthly controls and shows the exact stored expression before submission. Advanced mode remains
-available for numeric five-field expressions using `*`, lists, ranges, and steps. The current Main
-Sequence Job contract does not expose a per-Job timezone, so the application does not pretend that
-timezone is a configurable field.
+available for numeric five-field expressions using `*`, lists, ranges, and steps. The user selects
+an IANA timezone; the browser timezone is the create-form default. Main Sequence evaluates that
+local cron clock through daylight-saving transitions. UTC is available explicitly. Abbreviations
+and fixed offsets are not accepted.
 
 `universe_uid` defines the stable final signal identity. `account_uid` is serialized runtime
 configuration so an automatic run can access Alpaca and register missing components. It does not

@@ -1,7 +1,8 @@
 {
   "name": "alpacaconnectorssite",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,7 +19,7 @@
     "build:docs": "npm run docs:sync && docusaurus build documentation --out-dir ../dist/docs"
   },
   "dependencies": {
-    "@dev-mainsequence/command-center-sdk": "latest",
+    "@dev-mainsequence/command-center-sdk": "^0.1.21",
     "lucide-react": "^0.500.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

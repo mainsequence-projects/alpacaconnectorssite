@@ -89,6 +89,13 @@ Keep these distinctions:
   the environment, and no manual branch-import workflow is accepted. The
   backend assigns each branch to the same-Organization environment whose
   immutable required branch exactly matches.
+- CodeRepositoryBranch provisioning is durable and has exactly `CREATING`,
+  `READY`, or `FAILED` state. `READY` is equivalent to the compatible
+  `is_initialized=true` projection. Only `CREATING` is pollable; `FAILED` is
+  terminal until an authorized explicit DRF retry and retains its latest setup
+  JobRun UID plus stable failure fields. Recovery resolves stale state from the
+  persisted JobRun and never launches an automatic retry. Do not infer
+  readiness from CodeRepository creation returning successfully.
 - `OrganizationEnvironment` is shared by exact compatible
   CodeRepositoryBranches from one or several CodeRepositories. Its DataSource is routing
   configuration, not environment identity.
@@ -131,7 +138,11 @@ Keep these distinctions:
 - Every image-dependent `DeploymentRun` binds its exact image roles through
   typed `DeploymentRunImageDependency` rows. Active runs retain the live
   relation; terminal history may retain a typed tombstone after canonical
-  image deletion. One complete
+  image deletion. Every retained runtime `ResourceReleaseRevision` separately
+  pins its exact `CodeRepositoryJobImage`, including rollback revisions that
+  are neither active nor desired. When runtime retention removes an old
+  revision, the backend submits that former image to canonical guarded deletion;
+  shared images remain preserved. One complete
   `CodeRepositoryImageBuildRun` owns immutable build identity, provider request and
   operation state, a protected exact build-context artifact, reconciliation
   deadlines, and failure. Preparation commits before provider submission;
@@ -158,11 +169,15 @@ Keep these distinctions:
   `source=create`, `operation=deploy` contract.
 - A widget extension is a `resource_release` deployment specialization, not a
   new Blueprint design domain. Handoff uses `release_kind: widget_extension`
-  with `name`, optional `root_directory`, and optional release-owned
+  with `name`, required `entrypoint`, optional `root_directory`, and optional release-owned
   `revision_retention_count`; automatic deployment and the
   fixed SDK workload build are backend-owned. Never design an `extension_id`,
   image selector, build command, environment, active deployment, or a second
   publication-attempt system.
+  Consumption pins exact registered revisions through an environment-bound
+  workspace dependency plan, never the release's latest version. Public links
+  freeze a protected historical snapshot and recheck publisher release access;
+  ordinary workspace edits do not change the link's code dependencies.
 - Workflow APIs `2.0.0`, `2.1.0`, and `2.2.0` can carry non-secret target-owned `env_vars` for Jobs,
   runtime ResourceReleases, and CodeRepository Coding Agents. Static sites use
   `build_environment`; widget extensions accept neither. These literals configure only the declared target or
@@ -218,7 +233,9 @@ Every ResourceRelease independently owns immutable revisions, nullable
 `revision_retention_count` defaulting to `3`. Record a non-default retention
 choice only as accepted deployment intent. Never copy revision UIDs, provider
 endpoints, failed attempts, or live serving/cleanup state into a Blueprint, and
-never place retention inside the automatic-redeployment tag policy.
+never place retention inside the automatic-redeployment tag policy. Backend
+retention is asynchronous and may garbage-collect an unshared former runtime
+image only through canonical image-dependency preflight.
 
 ## Preserve The Organization Environment Contract
 
@@ -255,8 +272,10 @@ why each relationship needs a foreign key or constraint, and which access
 pattern justifies an index. State the physical database dialect because it
 affects the SQLAlchemy types, defaults, and constraint behavior.
 
-For a TimeIndexTableUpdater, explain the produced dataset, complete output grain, cadence,
-dependencies, incremental boundary, determinism, and consumers.
+For a TimeIndexTableUpdater, explain the produced dataset, complete output grain,
+input/output data frequency and freshness expectations, dependencies,
+incremental boundary, determinism, and consumers. Do not assign executable
+cadence to the updater.
 
 ### Advanced Mode
 
@@ -443,7 +462,8 @@ Record:
 - the output `TimeIndexMetaTable` reference (stored in the Blueprint's existing
   `output_metatable` field);
 - complete output grain: time index plus all identity dimensions;
-- cadence and freshness expectation;
+- input/output data frequency and freshness expectation, without treating it as
+  executable cadence;
 - TimeIndexTableUpdater, MetaTable, and external-data dependencies;
 - update boundary and partitioning;
 - determinism and idempotency expectations;
@@ -474,7 +494,14 @@ Record:
 - `spot`;
 - positive `max_runtime_seconds`;
 - optional `task_schedule` using the existing interval or crontab schedule
-  shape, including start-time or one-off intent when needed.
+  shape, including start-time or one-off intent when needed;
+- for every crontab, the canonical IANA timezone in which its wall-clock fields
+  are evaluated; interval schedules have no timezone.
+
+Do not translate a calendar schedule to the designer's current UTC offset. The
+Job snapshots its chosen timezone and does not follow later Command Center
+preference changes. Treat an omitted legacy timezone as UTC-compatible but not
+as confirmed user intent; new designs should always state the zone.
 
 The canonical creation flow infers the Job type from `execution_path`. Do not
 declare an independent type or command contract in the Blueprint. A `.ipynb`
@@ -839,7 +866,8 @@ its advertised default when no image UID is supplied.
 
 Never claim that a mutation succeeded until the canonical response confirms
 it. After an ambiguous result, retrieve or search before deciding whether to
-retry.
+retry. For CodeRepository bootstrap, stop polling on `FAILED`; MCP exposes no
+provisioning retry mutation.
 
 When a newly created or existing CodeRepository must become a local checkout, hand
 that separate lifecycle step to the `code-repository-local-setup` platform skill. That

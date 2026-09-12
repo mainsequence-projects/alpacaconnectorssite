@@ -38,11 +38,14 @@ Application documentation:
 : Ship user and technical documentation at `/docs/` in the same `dist/` artifact.
 
 Application-owned routes:
-: Assets, Accounts, Universes, Bars, Signals, and ETF Portfolios. The root resolves to Assets. Project-wide capability and configuration
+: Assets, Accounts, Universes, Bars, ETF Weight Signals, Rebalance Configurations, and ETF
+  Portfolios. The three portfolio routes are sibling destinations under the **Portfolios**
+  sub-application group. The root resolves to Assets. Project-wide capability and configuration
   reference belongs in the same-artifact documentation, not in an Overview application route.
 
 Resource collections and details:
-: The Accounts, Universes, Bars, Signals, and ETF Portfolios routes embed SDK `ResourceListPage` collections backed by their canonical
+: The Accounts, Universes, Bars, ETF Weight Signals, Rebalance Configurations, and ETF Portfolios
+  routes embed SDK `ResourceListPage` collections backed by their canonical
   list and discovery endpoints. Other future resource pages must use their authoritative collection,
   pagination, discovery, and detail contracts. Do not manufacture adapters from capability
   summaries.
@@ -91,7 +94,9 @@ owned by the root npm toolchain.
 2. Add a development-only direct transport for the local FastAPI server.
 3. Map transport startup and failures to SDK application feedback.
 4. Add one SDK-owned internal navigation panel headed by the Alpaca Connectors logo and label.
-   Keep Assets, Accounts, Universes, Bars, Signals, ETF Portfolios, and Documentation directly in that panel. The embedded
+   Keep Assets, Accounts, Universes, and Bars under **Workflows**; group ETF Weight Signals,
+   Rebalance Configurations, and ETF Portfolios under **Portfolios**; and keep Documentation under
+   **Reference**. The embedded
    child must not reproduce the host Command Center's application rail or application selector.
 
 Exit gate: the app never handles a host session token, all deployed API paths are relative, direct

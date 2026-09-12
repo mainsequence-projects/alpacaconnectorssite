@@ -16,6 +16,18 @@ export const DEFAULT_CRON_SCHEDULE: CronScheduleEditorValue = {
   advancedExpression: "0 9 * * 1-5",
 };
 
+export function browserScheduleTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+export function supportedScheduleTimezones(selected?: string | null): string[] {
+  const intl = Intl as typeof Intl & {
+    supportedValuesOf?: (key: "timeZone") => string[];
+  };
+  const supported = intl.supportedValuesOf?.("timeZone") ?? [];
+  return Array.from(new Set(["UTC", selected, ...supported].filter(Boolean) as string[]));
+}
+
 export const CRON_WEEKDAYS = [
   { value: "1", label: "Monday" },
   { value: "2", label: "Tuesday" },
@@ -133,20 +145,24 @@ export function parseCronExpression(expression: string): CronScheduleEditorValue
   return { ...DEFAULT_CRON_SCHEDULE, mode: "advanced", advancedExpression: normalized };
 }
 
-export function describeCronSchedule(value: CronScheduleEditorValue): string {
+export function describeCronSchedule(
+  value: CronScheduleEditorValue,
+  timezone?: string,
+): string {
+  const suffix = timezone ? ` (${timezone})` : "";
   if (value.mode === "advanced") {
     return isValidCronExpression(value.advancedExpression)
-      ? "Custom calendar schedule"
+      ? `Custom calendar schedule${suffix}`
       : "Enter a valid five-field crontab expression";
   }
   const time = splitTime(value.time);
   if (!time) return "Choose a valid time";
   const formattedTime = `${String(time.hour).padStart(2, "0")}:${String(time.minute).padStart(2, "0")}`;
-  if (value.mode === "daily") return `Every day at ${formattedTime}`;
-  if (value.mode === "weekdays") return `Monday through Friday at ${formattedTime}`;
+  if (value.mode === "daily") return `Every day at ${formattedTime}${suffix}`;
+  if (value.mode === "weekdays") return `Monday through Friday at ${formattedTime}${suffix}`;
   if (value.mode === "weekly") {
     const weekday = CRON_WEEKDAYS.find((day) => day.value === value.weekday)?.label ?? "selected day";
-    return `Every ${weekday} at ${formattedTime}`;
+    return `Every ${weekday} at ${formattedTime}${suffix}`;
   }
-  return `Day ${value.monthDay} of every month at ${formattedTime}`;
+  return `Day ${value.monthDay} of every month at ${formattedTime}${suffix}`;
 }
