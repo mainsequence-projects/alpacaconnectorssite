@@ -37,7 +37,10 @@ The collection operation remains authoritative for rows and pagination.
 4. Add frontend primary actions through structured declarations in the page-header region.
 5. Add row actions through supported row-action contracts.
 6. Route selection and discovered bulk actions through `$add-resource-actions`.
-7. Use `renderCard` only to change collection presentation, not collection lifecycle.
+7. Use `renderCard` only to change collection presentation, not collection lifecycle. For phones,
+   give columns an `importance` (one `primary`, the rest `secondary` or `tertiary`, plus
+   `hideBelow` for one-off overrides) and pass `tablePresentation="auto"` so the same columns
+   stack below 640px with a sort picker, a filters disclosure, and compact pagination.
 8. Use a resource activation adapter to resolve semantic `{ resource, uid }` intents and inject
    host navigation separately. Let `ResourceListPage` use `ResourceTransitionShell` for the
    blocking handoff instead of inserting an opening row or spinner into the table.
@@ -55,6 +58,14 @@ a native select or bespoke dropdown for SDK-owned list filters.
 
 Use narrow cell renderers and supported contribution points for domain presentation. Keep endpoint
 paths, route state, authentication, and query caching outside the SDK definition.
+
+## Check The Phone Presentation
+
+Render the screen at 375×812 with a coarse pointer and confirm no horizontal overflow, no control
+under 24px, no text input under 16px, and no hover-only affordance. Run the `/layout/testing`
+verifier at its default matrix when the screen sits in an `ApplicationPage`. Use
+`useCommandCenterViewport` from `/layout` for any width- or pointer-dependent host logic instead
+of `matchMedia`.
 
 ## Verify
 

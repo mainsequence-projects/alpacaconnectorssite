@@ -3,7 +3,6 @@ import {
   defineResourceApplication,
   type ResourceHttpClient,
   type ResourceHttpRequest,
-  type ResourceListResult,
 } from "@dev-mainsequence/command-center-sdk/resource";
 import {
   EntitySummary,
@@ -19,8 +18,6 @@ import {
 } from "@dev-mainsequence/command-center-sdk/views";
 import { Layers3 } from "lucide-react";
 import {
-  MouseEvent as ReactMouseEvent,
-  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -58,12 +55,6 @@ const ROW_ACTIONS: readonly ResourceDiscoveredRowAction<AssetUniverse>[] = [
     tone: "danger",
   },
 ];
-
-interface ContextMenuState {
-  universe: AssetUniverse;
-  x: number;
-  y: number;
-}
 
 interface UniverseRunPreflight {
   allowed: boolean;
@@ -298,8 +289,6 @@ export function UniverseResourceList({
 }) {
   const definition = useMemo(() => buildUniverseResource(transport), [transport]);
   const api = useMemo(() => createApiClient(transport), [transport]);
-  const [visibleUniverses, setVisibleUniverses] = useState<readonly AssetUniverse[]>([]);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [detailUniverseUid, setDetailUniverseUid] = useState<string | null>(null);
   const [runTarget, setRunTarget] = useState<AssetUniverse | null>(null);
   const [runAccounts, setRunAccounts] = useState<Account[]>([]);
@@ -309,9 +298,6 @@ export function UniverseResourceList({
   const [runPending, setRunPending] = useState(false);
   const [runRefreshKey, setRunRefreshKey] = useState(0);
   const combinedRefreshKey = `${refreshKey}:${runRefreshKey}`;
-  const handleResult = useCallback((result: ResourceListResult<AssetUniverse>) => {
-    setVisibleUniverses(result.items);
-  }, []);
 
   useEffect(() => {
     if (!runTarget) return;
@@ -378,49 +364,6 @@ export function UniverseResourceList({
     }
   }
 
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("blur", close);
-    window.addEventListener("resize", close);
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("blur", close);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [contextMenu]);
-
-  function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
-    const row = (event.target as HTMLElement).closest("tbody tr");
-    const body = row?.closest("tbody");
-    if (!row || !body) return;
-    const rowIndex = Array.from(body.children).indexOf(row);
-    const universe = visibleUniverses[rowIndex];
-    if (!universe) return;
-    event.preventDefault();
-    setContextMenu({
-      universe,
-      x: Math.min(event.clientX, window.innerWidth - 190),
-      y: Math.min(event.clientY, window.innerHeight - 190),
-    });
-  }
-
-  function invokeSdkRowAction(label: string) {
-    if (!contextMenu) return;
-    const index = visibleUniverses.findIndex((item) => item.uid === contextMenu.universe.uid);
-    const row = document.querySelectorAll(".universe-resource-list tbody tr").item(index);
-    const button = Array.from(row?.querySelectorAll<HTMLButtonElement>("button") ?? [])
-      .find((candidate) => candidate.textContent?.trim() === label);
-    button?.click();
-    window.setTimeout(() => setContextMenu(null), 0);
-  }
-
   if (detailUniverseUid) {
     return (
       <UniverseDetail
@@ -432,12 +375,11 @@ export function UniverseResourceList({
   }
 
   return (
-    <div className="universe-resource-list" onContextMenu={openContextMenu}>
+    <div className="universe-resource-list">
       <ResourceListPage
         definition={definition}
         discoveredRowActions={ROW_ACTIONS}
         embedded
-        onResult={handleResult}
         onRowActivate={(universe) => setDetailUniverseUid(universe.uid)}
         pageSize={25}
         refreshable
@@ -445,49 +387,6 @@ export function UniverseResourceList({
         rowActions={rowActions}
         searchPlaceholder="Search registered universes"
       />
-      {contextMenu ? (
-        <div
-          aria-label={`Actions for ${contextMenu.universe.display_name}`}
-          className="universe-context-menu"
-          onContextMenu={(event) => event.preventDefault()}
-          onPointerDown={(event) => event.stopPropagation()}
-          role="menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
-          <button
-            disabled={!contextMenu.universe.is_active}
-            onClick={() => invokeSdkRowAction("Extract components")}
-            role="menuitem"
-            type="button"
-          >
-            Extract components
-          </button>
-          <button
-            disabled={contextMenu.universe.is_active}
-            onClick={() => invokeSdkRowAction("Activate")}
-            role="menuitem"
-            type="button"
-          >
-            Activate
-          </button>
-          <button
-            disabled={!contextMenu.universe.is_active}
-            onClick={() => invokeSdkRowAction("Deactivate")}
-            role="menuitem"
-            type="button"
-          >
-            Deactivate
-          </button>
-          <button
-            className="universe-context-menu__danger"
-            onClick={() => invokeSdkRowAction("Delete")}
-            role="menuitem"
-            type="button"
-          >
-            Delete
-          </button>
-        </div>
-      ) : null}
       <ResourceActionConfirmationDialog
         open={runTarget !== null}
         actionLabel="Extract components"

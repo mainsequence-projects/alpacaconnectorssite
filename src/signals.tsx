@@ -1,9 +1,5 @@
 import { ApplicationStatusScreen } from "@dev-mainsequence/command-center-sdk/feedback";
 import {
-  CORE_TABULAR_FRAME_SOURCE_CONTRACT,
-  type TabularFrameSourceV1,
-} from "@dev-mainsequence/command-center-sdk/contracts";
-import {
   ApplicationCard,
   ApplicationPage,
   ApplicationPageHeader,
@@ -12,10 +8,12 @@ import {
 import {
   createHttpResourceAdapter,
   defineResourceApplication,
+  type ResourceColumnDefinition,
   type ResourceHttpClient,
   type ResourceHttpRequest,
 } from "@dev-mainsequence/command-center-sdk/resource";
 import {
+  DataTable,
   EntitySummary,
   ResourceActionConfirmationDialog,
   ResourceDetailShell,
@@ -26,13 +24,9 @@ import {
   type ResourcePickerOption,
   type ResourceRowAction,
 } from "@dev-mainsequence/command-center-sdk/views";
-import {
-  TableWidget,
-  tableWidget,
-  type TableWidgetProps,
-} from "@dev-mainsequence/command-center-sdk/widget/built-ins/table";
 import { Activity, Info } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
 import {
   API_ENDPOINTS,
@@ -113,61 +107,41 @@ function formatObservationTime(value: string): string {
   return timestamp.toISOString().replace("T", " ").replace(/\.000Z$/, " UTC");
 }
 
-function signalObservationFrame(observations: SignalObservations): TabularFrameSourceV1 {
-  const assetColumns = observations.assets.map((_, index) => (
-    `asset_${String(index).padStart(4, "0")}`
-  ));
-  const rows = observations.time_indexes.map((timeIndex, observationIndex) => {
-    const row: Record<string, unknown> = {
-      time_index: formatObservationTime(timeIndex),
-    };
-    assetColumns.forEach((column, assetIndex) => {
-      const weight = observations.assets[assetIndex].weights[observationIndex];
-      row[column] = weight === null || weight === undefined ? null : weight * 100;
-    });
-    return row;
-  });
+type SignalObservationRow = {
+  id: string;
+  timeIndex: string;
+  weights: readonly (number | null)[];
+};
 
-  return {
-    status: "ready",
-    columns: ["time_index", ...assetColumns],
-    rows,
-    fields: [
-      {
-        key: "time_index",
-        label: "Observation time",
-        type: "string",
-        nullable: false,
-        provenance: "derived",
-        derivedFrom: ["time_index"],
-      },
-      ...assetColumns.map((column, index) => ({
-        key: column,
-        label: observations.assets[index].symbol ?? observations.assets[index].asset_identifier,
-        description: observations.assets[index].name
-          ? `${observations.assets[index].name} · ${observations.assets[index].asset_identifier}`
-          : observations.assets[index].asset_identifier,
-        type: "number" as const,
-        nullable: true,
-        provenance: "derived" as const,
-        derivedFrom: ["asset_identifier", "signal_weight"],
-      })),
-    ],
-    source: {
-      kind: "alpaca-etf-signal-observations",
-      id: observations.signal_uid,
-      label: "Latest signal weights",
-      updatedAtMs: observations.time_indexes.length > 0
-        ? new Date(observations.time_indexes.at(-1)!).valueOf()
-        : undefined,
-      context: {
-        configuration_uid: observations.configuration_uid,
-        observation_count: observations.observation_count,
-        asset_count: observations.asset_count,
-        unit: "percent",
-      },
+function signalObservationRows(observations: SignalObservations): SignalObservationRow[] {
+  return observations.time_indexes.map((timeIndex, observationIndex) => ({
+    id: timeIndex,
+    timeIndex: formatObservationTime(timeIndex),
+    weights: observations.assets.map((asset) => asset.weights[observationIndex] ?? null),
+  }));
+}
+
+function signalObservationColumns(
+  observations: SignalObservations,
+): ResourceColumnDefinition<SignalObservationRow, ReactNode>[] {
+  return [
+    {
+      id: "time_index",
+      header: "Observation time",
+      importance: "primary",
+      getValue: (row) => row.timeIndex,
     },
-  };
+    ...observations.assets.map((asset, assetIndex) => ({
+      id: `asset_${String(assetIndex).padStart(4, "0")}`,
+      header: asset.symbol ?? asset.asset_identifier,
+      importance: "secondary" as const,
+      getValue: (row: SignalObservationRow) => row.weights[assetIndex],
+      renderCell: (row: SignalObservationRow) => {
+        const weight = row.weights[assetIndex];
+        return weight === null || weight === undefined ? "—" : `${(weight * 100).toFixed(4)}%`;
+      },
+    })),
+  ];
 }
 
 function SignalDetail({
@@ -203,35 +177,14 @@ function SignalDetail({
     return () => controller.abort();
   }, [api, configuration.uid, retryRevision]);
 
-  const frame = useMemo(
-    () => observations ? signalObservationFrame(observations) : null,
+  const tableRows = useMemo(
+    () => observations ? signalObservationRows(observations) : [],
     [observations],
   );
-  const tableProps = useMemo<TableWidgetProps>(() => ({
-    tableSourceMode: "bound",
-    density: "compact",
-    showToolbar: true,
-    showSearch: true,
-    showColumnFilters: false,
-    zebraRows: true,
-    pagination: true,
-    pageSize: 25,
-    selectionMode: "none",
-    schema: frame?.fields?.map((field) => field.key === "time_index" ? {
-      key: field.key,
-      label: field.label ?? "Observation time",
-      format: "text" as const,
-      minWidth: 224,
-      pinned: "left" as const,
-    } : {
-      key: field.key,
-      label: field.label ?? field.key,
-      format: "number" as const,
-      decimals: 4,
-      suffix: "%",
-      minWidth: 184,
-    }) ?? [],
-  }), [frame]);
+  const tableColumns = useMemo(
+    () => observations ? signalObservationColumns(observations) : [],
+    [observations],
+  );
 
   return (
     <ResourceDetailShell<SignalJobConfiguration>
@@ -306,26 +259,19 @@ function SignalDetail({
         <ApplicationCard header={<h2>Latest signal weights</h2>}>
           <p className="muted">This signal has no published observations yet. Run its Job to publish the first weight frame.</p>
         </ApplicationCard>
-      ) : frame ? (
+      ) : observations ? (
         <section className="signal-observations" aria-labelledby="signal-observations-heading">
           <div className="signal-observations__heading">
             <h2 id="signal-observations-heading">Latest signal weights</h2>
             <p>The latest {observations?.observation_count} observation times are rows and {observations?.asset_count} assets are columns.</p>
           </div>
           <div className="signal-observations__table">
-            <TableWidget
-              instanceId={`signal-observations-${configuration.uid}`}
-              widget={tableWidget}
-              props={tableProps}
-              resolvedInputs={{
-                seedData: {
-                  inputId: "seedData",
-                  label: "Signal observations",
-                  status: "valid",
-                  contractId: CORE_TABULAR_FRAME_SOURCE_CONTRACT,
-                  value: frame,
-                },
-              }}
+            <DataTable
+              columns={tableColumns}
+              emptyContent="No signal observations."
+              getId={(row) => row.id}
+              items={tableRows}
+              presentation="table"
             />
           </div>
           <p className="muted signal-observations__note">

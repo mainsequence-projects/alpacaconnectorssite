@@ -66,12 +66,17 @@ Use `--dry-run` before writing and `--json` for machine-readable evidence. Resol
 `--mcp-url`, `COMMAND_CENTER_SDK_MCP_URL`, or `MAINSEQUENCE_ENDPOINT`; keep
 `MAINSEQUENCE_ACCESS_TOKEN` in the process environment and never put it in a command argument.
 Inspect `.agents/skills/command-center/PINNED_FROM.txt` for the package version and
-`.agents/skills/mainsequence/MCP_PINNED_FROM.txt` for the backend manifest. The installer owns only
-the recorded paths in each namespace and preserves unrelated application-owned guidance.
+`.agents/skills/mainsequence/MCP_PINNED_FROM.txt` for the backend manifest. Treat the installed SDK
+catalog as authoritative for the complete `command-center` namespace: install, postinstall, update,
+and sync prune every entry not authorized by the current package, including unrecorded legacy
+skills. Put application-owned guidance in another namespace. The `mainsequence` installer retains
+its narrower backend-proven path ownership, and all other namespaces remain untouched.
 
 ## Choose Public Entrypoints
 
-- Use `/navigation` for controlled application navigation definitions and chrome.
+- Use `/navigation` for canonical zero/one/two-level embedded application shells and controlled
+  navigation definitions. Use `/navigation/testing` to assert startup gating, declared depth, and
+  absence of child top navigation.
 - Use `/layout` for complete page, header, stack, card, and card-grid composition. Use
   `/layout/testing` for real-browser geometry verification, and route the workflow to
   `$compose-command-center-page`.
@@ -83,19 +88,13 @@ the recorded paths in each namespace and preserves unrelated application-owned g
 - Use `/contracts` for JSON-safe shared contracts and migrations.
 - Use `/contracts/manifest.json`, `/contracts/schemas/*`, and `/contracts/fixtures/*` for
   language-neutral backend payload design and validation.
-- Use `/widget`, `/widget/host`, `/widget/testing`, `/widget/ui`, and `/widget/built-ins` for widgets.
-  Use the narrow `/widget/built-ins/app-component`, `/widget/built-ins/tabular-transform`,
-  `/widget/built-ins/table`, and `/widget/built-ins/pro-table` exports when implementing one of
-  those existing contracts.
-- Use `/workspace` for workspace documents and `/workspace/react` for read-only rendering.
 - Use `/theme`, `/theme/presets`, and `/theme/data-viz` for theme behavior.
-- Use `/embed` and `/embed/react` for both deliberately separate iframe protocols: generic external
-  widgets use `command-center-iframe@v1`; application-owned static sites use the numeric v1
+- Use `/embed` and `/embed/react` for application-owned static sites using the numeric v1
   `mainsequence.*` handshake. Static sites call an authorized FastAPI ResourceRelease through the
   client's high-level `fetchFastApi` method while the host injects `resolveFastApiCredential`.
   The child consumes `StaticSiteFastApiTransportState` through `onFastApiStateChange` or
   `getFastApiState`; the SDK owns bounded retry, credential refresh, and cancellation. Route that
-  work to `$integrate-static-site-iframe`; never translate between the two protocols.
+  work to `$integrate-static-site-iframe`.
 
 Keep framework-neutral modules free of React imports. Import browser CSS through documented package
 CSS exports and load each required bundle once. Complete application layout requires both
@@ -108,8 +107,8 @@ route each internal surface to its focused implementation skill.
 
 ## Preserve The Package Boundary
 
-Use the SDK for reusable contracts, normalized lifecycle, controlled views, widgets, workspaces,
-themes, and embeds. Keep a consumer's transport configuration, routing policy, authentication,
+Use the SDK for reusable contracts, normalized lifecycle, controlled views, themes, and embeds.
+Keep a consumer's transport configuration, routing policy, authentication,
 persistence choice, and domain behavior behind injected callbacks or adapters.
 
 If the installed SDK does not expose a required capability, do not edit `node_modules` or import an
@@ -118,7 +117,7 @@ inputs and outputs, and whether serialized compatibility is affected. Stop and h
 separate SDK-source maintenance task when it is genuinely reusable.
 
 Use the dedicated implementation skills selected by `$build-command-center-application` for
-resource views, widgets, workspaces, embeds, Adapter From API, and language-neutral contract
+resource views, static-site embeds, and language-neutral contract
 workflows. Those skills configure published contracts; they do not extend the SDK.
 
 ## Verify
