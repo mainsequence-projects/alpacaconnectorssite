@@ -8,7 +8,7 @@ export const API_ENDPOINTS = {
   universeDiscovery: "/v1/universes/discovery",
   accounts: "/v1/accounts",
   accountDiscovery: "/v1/accounts/discovery",
-  accountSecretReferences: "/v1/accounts/secret-references",
+  accountRegistrationPreflight: "/v1/accounts/registration/preflight",
   barConfigurations: "/v1/market-data/bar-configurations",
   barConfigurationDiscovery: "/v1/market-data/bar-configurations/discovery",
   signalJobs: "/v1/signal-jobs",
@@ -47,8 +47,14 @@ export interface Account {
   account_name: string;
   account_is_active: boolean;
   is_paper: boolean;
+  /** `managed`: Secrets created and owned by the API; `external`: existing Secrets it only reads. */
+  credential_source: "managed" | "external";
   api_key_secret_name: string;
   secret_key_secret_name: string;
+  api_key_secret_uid: string | null;
+  secret_key_secret_uid: string | null;
+  credentials_updated_at: string | null;
+  credentials_updated_by_user_uid: string | null;
   status: string | null;
   currency: string | null;
   snapshot_time: string | null;
@@ -99,22 +105,64 @@ export interface Asset {
   composite_figi: string | null;
 }
 
+/**
+ * Write-only Alpaca credential values. The API validates them against Alpaca and stores them as
+ * application-managed Main Sequence Secrets; they are never returned. The site sends only this
+ * `managed` shape.
+ */
+export interface ManagedAlpacaCredentials {
+  source: "managed";
+  api_key: string;
+  secret_key: string;
+}
+
 export interface AccountRegistrationRequest {
-  account_name: string;
+  account_name: string | null;
   environment: "paper" | "live";
-  api_key_secret_name: string;
-  secret_key_secret_name: string;
+  credentials: ManagedAlpacaCredentials;
 }
 
-export interface AccountUpdateRequest {
-  account_name: string;
-  api_key_secret_name: string;
-  secret_key_secret_name: string;
-  account_is_active: boolean;
-}
-
-export interface SecretReference {
+export interface AccountSecretWrite {
   name: string;
+  action: "create" | "update";
+}
+
+/** Read-only registration dry run returned by the preflight endpoint; nothing is written. */
+export interface AccountRegistrationPreflightResponse {
+  account_unique_identifier: string;
+  account_number: string | null;
+  status: string | null;
+  is_paper: boolean;
+  credential_source: "managed" | "external";
+  /** Managed Secret names that registration would write. */
+  api_key_secret_name: string;
+  secret_key_secret_name: string;
+  secret_writes: AccountSecretWrite[];
+  equity: string | number | null;
+  cash: string | number | null;
+  would_write_holdings: number;
+  unresolved_symbols: string[];
+  alpaca_asset_ids_to_register: string[];
+  cash_asset_identifiers_to_ensure: string[];
+}
+
+/**
+ * Partial update: send only changed fields; the API rejects a body without fields. Name and
+ * active-state changes never send `credentials`, which rotates both stored values.
+ */
+export interface AccountUpdateRequest {
+  account_name?: string;
+  account_is_active?: boolean;
+  credentials?: ManagedAlpacaCredentials;
+}
+
+export interface AccountDeleteResponse {
+  account_uid: string;
+  registration_removed: boolean;
+  account_deactivated: boolean;
+  retained_holdings_sets: number;
+  deleted_secrets: string[];
+  warnings: string[];
 }
 
 export interface AssetRegistrationRequest {
@@ -547,11 +595,14 @@ export interface ApiTransport {
 
 export class ApiResponseError extends Error {
   readonly status: number;
+  /** Stable error code from a `{"detail": {"code", "message"}}` body, when present. */
+  readonly code: string | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code: string | null = null) {
     super(message);
     this.name = "ApiResponseError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -576,6 +627,11 @@ function readErrorDetail(payload: unknown): string | null {
   return messages.length > 0 ? messages.join("; ") : null;
 }
 
+function readErrorCode(payload: unknown): string | null {
+  if (!isRecord(payload) || !isRecord(payload.detail)) return null;
+  return typeof payload.detail.code === "string" ? payload.detail.code : null;
+}
+
 export async function readApiResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
   let payload: unknown = null;
@@ -591,6 +647,7 @@ export async function readApiResponse<T>(response: Response): Promise<T> {
     throw new ApiResponseError(
       response.status,
       readErrorDetail(payload) ?? `The API request failed with status ${response.status}.`,
+      readErrorCode(payload),
     );
   }
   return payload as T;

@@ -24,7 +24,7 @@ Configurations, and ETF Portfolios are grouped together under **Portfolios**:
 | Site page | Interactive behavior |
 | --- | --- |
 | Assets | Plan and execute exact-symbol asset registration |
-| Accounts | Create, inspect, update, and delete Alpaca registrations using Secret names |
+| Accounts | Create, inspect, update, rotate credentials for, and delete Alpaca registrations from their API keys |
 | Universes | Create explicit Asset Universe registrations and Run extraction, constituent registration, and membership refresh |
 | Bars | Create, inspect, edit, and delete stored Alpaca bars configurations |
 | ETF Weight Signals | Create, inspect, edit, run, enable or disable scheduling, and delete dedicated signal Job configurations |

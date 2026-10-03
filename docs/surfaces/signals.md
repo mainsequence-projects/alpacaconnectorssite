@@ -6,7 +6,7 @@ is the signal list; select **Create signal** to open the form.
 Each configuration selects:
 
 - one active registered Universe;
-- one active registered Alpaca account used to resolve Secret names at runtime;
+- one active registered Alpaca account whose credential Secrets are resolved at runtime;
 - an interval or calendar schedule; and
 - CPU, memory, maximum runtime, and spot preferences.
 

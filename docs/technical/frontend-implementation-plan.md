@@ -62,10 +62,11 @@ Portable widgets and workspaces:
 Backend adapters and contracts:
 : A single application transport selects the SDK delegated FastAPI client when embedded and a
   direct unauthenticated local fetch only during Vite development. Typed response guards keep
-  malformed responses out of the UI. The Accounts route loads Secret names through a metadata-only
-  endpoint and never accepts values. The Universes route accepts an explicit source URL when the
-  universe is created and does not load provider configuration or infer a provider. Its types keep
-  Universe UID, Source UID, and Asset Category UID distinct.
+  malformed responses out of the UI. The Accounts route sends Alpaca keys only as write-only
+  request fields that the API stores as Main Sequence Secrets, and never receives them back. The
+  Universes route accepts an explicit source URL when the universe is created and does not load
+  provider configuration or infer a provider. Its types keep Universe UID, Source UID, and Asset
+  Category UID distinct.
 
 Selected focused skills:
 : Use Command Center SDK, build Command Center application, integrate static-site iframe, theme
@@ -154,15 +155,18 @@ snapshot as a side effect.
 ### Phase 7 — account-registration CRUD
 
 1. Adapt `/v1/accounts` and `/v1/accounts/discovery` with the SDK HTTP resource adapter.
-2. Populate searchable Secret pickers from `/v1/accounts/secret-references`, whose payload contains
-   names only and never Secret values.
-3. Create paper or live account registrations; registration always registers missing held assets
-   and creates the initial holdings snapshot in the same flow.
-4. Edit account names, Secret bindings, and active state while keeping the environment immutable.
-5. Delete through an SDK confirmation dialog and explain that historical holdings remain stored.
+2. Collect the Alpaca API key and secret key in password fields with autocomplete off; keep them
+   only in component state (ADR 0011, API-managed credential Secrets).
+3. Review paper or live registrations through the read-only preflight, then register; registration
+   always registers missing held assets and creates the initial holdings snapshot in the same flow.
+4. Edit account names and active state without sending credentials, and rotate credentials only
+   when both new keys are entered, while keeping the environment immutable.
+5. Delete through an SDK confirmation dialog that explains which credential Secrets are deleted and
+   that historical holdings remain stored.
 
-Exit gate: browser coverage proves create, update, and delete using selected Secret names; no raw
-credential field exists in the frontend contract, fixture, or rendered form.
+Exit gate: browser coverage proves review, create, update, rotation, and delete with the exact
+request bodies; no request URL carries a key value and no request reaches the Secret-reference
+endpoint.
 
 ### Phase 8 — Universe-backed signal Jobs
 

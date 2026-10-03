@@ -2,8 +2,9 @@
 
 Embedded React application for the Alpaca Connectors FastAPI surface. It provides project-state
 visibility, asset-registration workflows, account registration, holdings-universe workflows, and
-stored bars configurations without duplicating the backend business logic. Account forms select
-existing Main Sequence Secret names and never accept Alpaca credential values.
+stored bars configurations without duplicating the backend business logic. Account forms accept
+the Alpaca API key and secret key as write-only password fields; the API validates them with Alpaca
+and stores them as Main Sequence Secrets, and the application never displays them again.
 
 ## Local development
 

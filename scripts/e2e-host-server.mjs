@@ -99,8 +99,13 @@ let accounts = [
     is_paper: true,
     account_is_active: true,
     unique_identifier: "PAPER__ALPACA",
+    credential_source: "external",
     api_key_secret_name: "ALPACA_PAPER_API_KEY",
     secret_key_secret_name: "ALPACA_PAPER_SECRET_KEY",
+    api_key_secret_uid: "secret-paper-api-key",
+    secret_key_secret_uid: "secret-paper-secret-key",
+    credentials_updated_at: null,
+    credentials_updated_by_user_uid: null,
     status: "ACTIVE",
     currency: "USD",
     snapshot_time: "2026-01-03T14:30:00Z",
@@ -482,6 +487,43 @@ function sendJson(response, status, payload) {
   response.end(JSON.stringify(payload));
 }
 
+// Mirrors the API's account request validation (ADR 0011): unknown fields, including the retired
+// top-level Secret-name fields, are rejected, and 422 bodies never echo the submitted input.
+function accountValidationErrors(body, { allowed, required }) {
+  const errors = [];
+  for (const key of Object.keys(body)) {
+    if (!allowed.includes(key)) {
+      errors.push({ loc: ["body", key], msg: "Extra inputs are not permitted", type: "extra_forbidden" });
+    }
+  }
+  for (const key of required) {
+    if (!(key in body)) errors.push({ loc: ["body", key], msg: "Field required", type: "missing" });
+  }
+  if ("credentials" in body) {
+    const credentials = body.credentials ?? {};
+    const keys = Object.keys(credentials).sort().join(",");
+    const apiKey = String(credentials.api_key ?? "").trim();
+    const secretKey = String(credentials.secret_key ?? "").trim();
+    if (credentials.source !== "managed" || keys !== "api_key,secret_key,source") {
+      errors.push({ loc: ["body", "credentials"], msg: "Invalid managed credentials", type: "value_error" });
+    } else if (!apiKey || !secretKey || apiKey === secretKey) {
+      errors.push({
+        loc: ["body", "credentials"],
+        msg: "Value error, api_key and secret_key must be different non-empty values.",
+        type: "value_error",
+      });
+    }
+  }
+  return errors;
+}
+
+function managedSecretNames(uniqueIdentifier) {
+  return {
+    api_key_secret_name: `ALPACA_CONNECTORS__${uniqueIdentifier}__API_KEY`,
+    secret_key_secret_name: `ALPACA_CONNECTORS__${uniqueIdentifier}__SECRET_KEY`,
+  };
+}
+
 async function readJson(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
@@ -805,19 +847,56 @@ createServer(async (request, response) => {
       },
     });
   }
+  const accountRegistrationFields = {
+    allowed: ["account_name", "environment", "credentials"],
+    required: ["credentials"],
+  };
+  if (request.method === "POST" && url.pathname === "/v1/accounts/registration/preflight") {
+    const body = await readJson(request);
+    const errors = accountValidationErrors(body, accountRegistrationFields);
+    if (errors.length) return sendJson(response, 422, { detail: errors });
+    const uid = `account-${accounts.length + 1}`;
+    const uniqueIdentifier = `${uid.toUpperCase()}__ALPACA_${body.environment.toUpperCase()}`;
+    const secretNames = managedSecretNames(uniqueIdentifier);
+    return sendJson(response, 200, {
+      account_unique_identifier: uniqueIdentifier,
+      account_number: "PA0000000002",
+      status: "ACTIVE",
+      is_paper: body.environment === "paper",
+      credential_source: "managed",
+      ...secretNames,
+      secret_writes: [
+        { name: secretNames.api_key_secret_name, action: "create" },
+        { name: secretNames.secret_key_secret_name, action: "create" },
+      ],
+      equity: "100000",
+      cash: "50000",
+      would_write_holdings: 3,
+      unresolved_symbols: [],
+      alpaca_asset_ids_to_register: ["22222222-2222-4222-8222-222222222222"],
+      cash_asset_identifiers_to_ensure: ["USD"],
+    });
+  }
   if (request.method === "POST" && url.pathname === "/v1/accounts") {
     const body = await readJson(request);
+    const errors = accountValidationErrors(body, accountRegistrationFields);
+    if (errors.length) return sendJson(response, 422, { detail: errors });
     const now = new Date().toISOString();
     const uid = `account-${accounts.length + 1}`;
+    const uniqueIdentifier = `${uid.toUpperCase()}__ALPACA_${body.environment.toUpperCase()}`;
     const created = {
       uid,
       account_uid: uid,
-      unique_identifier: `${uid.toUpperCase()}__ALPACA_${body.environment.toUpperCase()}`,
+      unique_identifier: uniqueIdentifier,
       account_name: body.account_name,
       is_paper: body.environment === "paper",
       account_is_active: true,
-      api_key_secret_name: body.api_key_secret_name,
-      secret_key_secret_name: body.secret_key_secret_name,
+      credential_source: "managed",
+      ...managedSecretNames(uniqueIdentifier),
+      api_key_secret_uid: `secret-${uid}-api-key`,
+      secret_key_secret_uid: `secret-${uid}-secret-key`,
+      credentials_updated_at: now,
+      credentials_updated_by_user_uid: "user-e2e",
       status: "ACTIVE",
       currency: "USD",
       snapshot_time: now,
@@ -884,12 +963,48 @@ createServer(async (request, response) => {
     if (request.method === "GET") return sendJson(response, 200, accounts[index]);
     if (request.method === "PATCH") {
       const body = await readJson(request);
-      accounts[index] = { ...accounts[index], ...body };
+      const errors = accountValidationErrors(body, {
+        allowed: ["account_name", "account_is_active", "credentials"],
+        required: [],
+      });
+      if (errors.length) return sendJson(response, 422, { detail: errors });
+      if (Object.keys(body).length === 0) {
+        return sendJson(response, 422, {
+          detail: [{
+            loc: ["body"],
+            msg: "Value error, At least one mutable account field must be provided.",
+            type: "value_error",
+          }],
+        });
+      }
+      const { credentials, ...changes } = body;
+      accounts[index] = { ...accounts[index], ...changes };
+      if (credentials) {
+        const uid = accounts[index].uid;
+        accounts[index] = {
+          ...accounts[index],
+          credential_source: "managed",
+          ...managedSecretNames(accounts[index].unique_identifier),
+          api_key_secret_uid: `secret-${uid}-api-key`,
+          secret_key_secret_uid: `secret-${uid}-secret-key`,
+          credentials_updated_at: new Date().toISOString(),
+          credentials_updated_by_user_uid: "user-e2e",
+        };
+      }
       return sendJson(response, 200, accounts[index]);
     }
     if (request.method === "DELETE") {
       const [deleted] = accounts.splice(index, 1);
-      return sendJson(response, 200, { account_uid: deleted.uid, deleted: true });
+      return sendJson(response, 200, {
+        account_uid: deleted.uid,
+        registration_removed: true,
+        account_deactivated: true,
+        retained_holdings_sets: 0,
+        deleted_secrets: deleted.credential_source === "managed"
+          ? [deleted.api_key_secret_name, deleted.secret_key_secret_name]
+          : [],
+        warnings: [],
+      });
     }
   }
   if (request.method === "GET" && url.pathname === "/v1/universe-sources") {

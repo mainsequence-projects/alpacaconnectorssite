@@ -18,8 +18,10 @@ This repository is the Command Center static-site application for the Alpaca Con
 
 - Assets: exact-symbol registration planning and execution, with polling of the API's
   persisted operation and ordered step status.
-- Accounts: create, list, update, and delete Alpaca registrations by selecting visible Main
-  Sequence Secret names; never accept credential values.
+- Accounts: create, list, update, and delete Alpaca registrations. Users type the Alpaca API key
+  and secret key; the API validates them and stores them as application-managed Main Sequence
+  Secrets (connector ADR 0011). Keep the values in component state only, clear them after use, and
+  never put them in a URL, browser storage, persisted view state, or logs.
 - Universes: account-independent ETF holdings sources; Run asks for an Alpaca account only as
   execution context when it registers newly discovered constituents.
 - Bars: create, list, edit, and delete stored Alpaca bar configurations using registered accounts,

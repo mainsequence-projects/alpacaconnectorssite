@@ -1,5 +1,12 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { assertCommandCenterPageLayout } from "@dev-mainsequence/command-center-sdk/layout/testing";
+
+async function selectRowAction(page: Page, row: Locator, label: string) {
+  await row.getByRole("button", { name: "Actions", exact: true }).click();
+  const menu = page.getByRole("menu", { name: "Actions", exact: true });
+  await expect(menu).toBeVisible();
+  await menu.getByRole("menuitem", { name: label, exact: true }).click();
+}
 
 test("opens Assets in the SDK navigation shell and conforms at Command Center viewports", async ({ page }) => {
   await page.goto("/");
@@ -32,81 +39,302 @@ test("opens Assets in the SDK navigation shell and conforms at Command Center vi
   await assertCommandCenterPageLayout(page);
 });
 
-test("creates, updates, and deletes an account using Secret references", async ({ page }) => {
-  const searchedSecretNames: string[] = [];
-  await page.route("**/v1/accounts/secret-references?*", async (route) => {
-    const search = new URL(route.request().url()).searchParams.get("search") ?? "";
-    if (search) {
-      searchedSecretNames.push(search);
-      await route.continue();
-      return;
+const E2E_API_ORIGIN = "http://127.0.0.1:4274";
+// Synthetic values for the e2e fixture API only.
+const LIVE_API_KEY = "AKE2ELIVEAPIKEY000001";
+const LIVE_SECRET_KEY = "e2eLiveSecretKeyValue000000000000000001";
+const ROTATED_API_KEY = "AKE2EROTATEDAPIKEY0002";
+const ROTATED_SECRET_KEY = "e2eRotatedSecretKeyValue00000000000002";
+
+function trackAccountTraffic(page: Page) {
+  const requestUrls: string[] = [];
+  const accountWrites: Array<{ method: string; path: string; body: unknown }> = [];
+  page.on("request", (request) => {
+    requestUrls.push(request.url());
+    const url = new URL(request.url());
+    if (url.pathname.startsWith("/v1/accounts") && ["POST", "PATCH"].includes(request.method())) {
+      accountWrites.push({ method: request.method(), path: url.pathname, body: request.postDataJSON() });
     }
-    await route.fulfill({
-      contentType: "application/json",
-      json: {
-        items: [],
-        pageInfo: {
-          pageIndex: 0,
-          pageSize: 100,
-          totalItems: 0,
-          hasNextPage: false,
-          hasPreviousPage: false,
-        },
-      },
-    });
   });
+  return { requestUrls, accountWrites };
+}
+
+function expectNoCredentialLeak(requestUrls: string[], values: string[]) {
+  expect(requestUrls.filter((url) => url.includes("/secret-references"))).toEqual([]);
+  for (const value of values) {
+    expect(requestUrls.filter((url) => url.includes(value))).toEqual([]);
+  }
+}
+
+test("registers an account from Alpaca keys after a preflight review", async ({ page }) => {
+  const { requestUrls, accountWrites } = trackAccountTraffic(page);
   await page.goto("/accounts");
   await expect(page.getByRole("heading", { level: 1, name: "Alpaca account registrations" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Register account" })).toHaveCount(0);
-  await expect(page.getByLabel("Capture an initial holdings snapshot after registration")).toHaveCount(0);
-  await expect(page.getByText("Register strictly resolved missing held assets")).toHaveCount(0);
   await expect(page.getByRole("row", { name: /Paper account/ })).toBeVisible();
   const registerAction = page.getByRole("button", { name: "Register account", exact: true });
   await expect(registerAction).toHaveCount(1);
   await registerAction.click();
+
+  const form = page.locator("form.workflow-form");
+  const accountNameInput = form.getByLabel("Account name");
+  const apiKeyInput = form.getByLabel("API key", { exact: true });
+  const secretKeyInput = form.getByLabel("Secret key", { exact: true });
+  const reviewAction = form.getByRole("button", { name: "Review registration" });
+  const confirmRegistration = form.getByRole("button", { name: "Register account" });
+  const review = form.getByRole("region", { name: "Registration review" });
   await expect(page.getByRole("heading", { name: "Register account" })).toBeVisible();
   await expect(page.getByText("Registration resolves every non-zero holding")).toBeVisible();
-  await expect(page.getByText("Credential values remain in Main Sequence")).toBeVisible();
+  await expect(page.getByText("this application never displays them again")).toBeVisible();
+  await expect(form.getByRole("button", { name: /Secret$/ })).toHaveCount(0);
+  for (const input of [apiKeyInput, secretKeyInput]) {
+    await expect(input).toHaveAttribute("type", "password");
+    await expect(input).toHaveAttribute("autocomplete", "off");
+    await expect(input).toHaveAttribute("spellcheck", "false");
+  }
 
-  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await accountNameInput.fill("Abandoned registration");
+  await apiKeyInput.fill(LIVE_API_KEY);
+  await secretKeyInput.fill(LIVE_SECRET_KEY);
+  await form.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Register account" })).toHaveCount(0);
-  await expect(page.getByRole("row", { name: /Paper account/ })).toBeVisible();
-  await page.getByRole("button", { name: "Register account", exact: true }).click();
-  const registrationForm = page.locator("form.workflow-form");
+  await registerAction.click();
+  await expect(accountNameInput).toHaveValue("");
+  await expect(apiKeyInput).toHaveValue("");
+  await expect(secretKeyInput).toHaveValue("");
 
-  await registrationForm.getByLabel("Account name").fill("Live operations");
-  await registrationForm.getByLabel("Environment").selectOption("live");
-  await registrationForm.getByRole("button", { name: "API key Secret" }).click();
-  await page.getByPlaceholder("Search Secret names").fill("ALPACA_LIVE_API");
-  await page.getByRole("option", { name: "ALPACA_LIVE_API_KEY" }).click();
-  await registrationForm.getByRole("button", { name: "Secret key Secret" }).click();
-  await page.getByPlaceholder("Search Secret names").fill("ALPACA_LIVE_SECRET");
-  await page.getByRole("option", { name: "ALPACA_LIVE_SECRET_KEY" }).click();
-  expect(searchedSecretNames).toEqual(expect.arrayContaining([
-    "ALPACA_LIVE_API",
-    "ALPACA_LIVE_SECRET",
-  ]));
-  await registrationForm.getByRole("button", { name: "Register account" }).click();
+  await accountNameInput.fill("Live operations");
+  await form.getByLabel("Environment").selectOption("live");
+  await apiKeyInput.fill(LIVE_API_KEY);
+  await secretKeyInput.fill(LIVE_API_KEY);
+  await expect(form.getByText("The API key and the secret key must be different values.")).toBeVisible();
+  await expect(reviewAction).toBeDisabled();
+  await secretKeyInput.fill(` ${LIVE_SECRET_KEY} `);
+  await expect(confirmRegistration).toBeDisabled();
+  await reviewAction.click();
+
+  const registrationBody = {
+    account_name: "Live operations",
+    environment: "live",
+    credentials: { source: "managed", api_key: LIVE_API_KEY, secret_key: LIVE_SECRET_KEY },
+  };
+  await expect(review).toBeVisible();
+  await expect(review.getByText("Ready", { exact: true })).toBeVisible();
+  await expect(review).toContainText(/ACCOUNT-\d+__ALPACA_LIVE/);
+  await expect(review).toContainText("PA0000000002");
+  await expect(review.getByText("Live", { exact: true })).toBeVisible();
+  await expect(review.getByText("22222222-2222-4222-8222-222222222222", { exact: true })).toBeVisible();
+  await expect(review.getByText("USD", { exact: true })).toBeVisible();
+  await expect(review.getByText(/^ALPACA_CONNECTORS__ACCOUNT-\d+__ALPACA_LIVE__API_KEY$/)).toBeVisible();
+  await expect(review.getByText(/^ALPACA_CONNECTORS__ACCOUNT-\d+__ALPACA_LIVE__SECRET_KEY$/)).toBeVisible();
+  await expect(review.getByText("Create", { exact: true })).toHaveCount(2);
+  await expect(confirmRegistration).toBeEnabled();
+  expect(accountWrites).toEqual([
+    { method: "POST", path: "/v1/accounts/registration/preflight", body: registrationBody },
+  ]);
+
+  await secretKeyInput.fill(`${LIVE_SECRET_KEY}9`);
+  await expect(review).toHaveCount(0);
+  await expect(confirmRegistration).toBeDisabled();
+  await secretKeyInput.fill(LIVE_SECRET_KEY);
+  await expect(confirmRegistration).toBeDisabled();
+  await reviewAction.click();
+  await expect(review).toBeVisible();
+  await confirmRegistration.click();
   await expect(page.getByRole("heading", { name: "Registered Live operations." })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Register account" })).toHaveCount(0);
+  expect(accountWrites).toEqual([
+    { method: "POST", path: "/v1/accounts/registration/preflight", body: registrationBody },
+    { method: "POST", path: "/v1/accounts/registration/preflight", body: registrationBody },
+    { method: "POST", path: "/v1/accounts", body: registrationBody },
+  ]);
+  await expect(page.getByRole("row", { name: /Live operations/ }).getByText("Live", { exact: true })).toBeVisible();
 
-  let createdRow = page.getByRole("row", { name: /Live operations/ });
-  await expect(createdRow.getByText("Live", { exact: true })).toBeVisible();
-  await createdRow.getByRole("button", { name: "Edit" }).click();
+  await registerAction.click();
+  await expect(accountNameInput).toHaveValue("");
+  await expect(apiKeyInput).toHaveValue("");
+  await expect(secretKeyInput).toHaveValue("");
+  await form.getByRole("button", { name: "Cancel", exact: true }).click();
+  expectNoCredentialLeak(requestUrls, [LIVE_API_KEY, LIVE_SECRET_KEY]);
+});
+
+test("edits, rotates, inspects, and removes a managed account", async ({ page, request }) => {
+  const legacyRegistration = await request.post(`${E2E_API_ORIGIN}/v1/accounts`, {
+    data: {
+      account_name: "Legacy request",
+      environment: "paper",
+      api_key_secret_name: "ALPACA_PAPER_API_KEY",
+      secret_key_secret_name: "ALPACA_PAPER_SECRET_KEY",
+    },
+  });
+  expect(legacyRegistration.status()).toBe(422);
+  const created = await (await request.post(`${E2E_API_ORIGIN}/v1/accounts`, {
+    data: {
+      account_name: "Rotation desk",
+      environment: "paper",
+      credentials: { source: "managed", api_key: "AKE2ESETUPKEY0003", secret_key: "e2eSetupSecretKey0003" },
+    },
+  })).json() as { uid: string; unique_identifier: string };
+
+  const { requestUrls, accountWrites } = trackAccountTraffic(page);
+  await page.goto("/accounts");
+  const row = page.getByRole("row", { name: /Rotation desk/ });
+  const form = page.locator("form.workflow-form");
+  const newApiKey = form.getByLabel("New API key");
+  const newSecretKey = form.getByLabel("New secret key");
+  const saveChanges = form.getByRole("button", { name: "Save changes" });
+  const accountPath = `/v1/accounts/${created.uid}`;
+
+  await row.getByRole("button", { name: "Edit" }).click();
   await expect(page.getByRole("heading", { name: "Edit account registration" })).toBeVisible();
-  await page.getByLabel("Account name").fill("Live operations updated");
-  await page.getByLabel("Active", { exact: true }).uncheck();
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByRole("heading", { name: "Updated Live operations updated." })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Edit account registration" })).toHaveCount(0);
+  await expect(form.getByRole("heading", { name: "Rotate credentials" })).toBeVisible();
+  await expect(form.getByText("Leave both fields empty to keep the current credentials.", { exact: false })).toBeVisible();
+  await expect(newApiKey).toHaveAttribute("type", "password");
+  await expect(newSecretKey).toHaveAttribute("autocomplete", "off");
+  await expect(form.getByText("No changes to save.", { exact: true })).toBeVisible();
+  await expect(saveChanges).toBeDisabled();
+  await form.getByLabel("Account name").fill("Rotation desk renamed");
+  await form.getByLabel("Active", { exact: true }).uncheck();
+  await saveChanges.click();
+  await expect(page.getByRole("heading", { name: "Updated Rotation desk renamed." })).toBeVisible();
+  expect(accountWrites).toEqual([
+    { method: "PATCH", path: accountPath, body: { account_name: "Rotation desk renamed", account_is_active: false } },
+  ]);
 
-  createdRow = page.getByRole("row", { name: /Live operations updated/ });
-  await expect(createdRow.getByText("Inactive", { exact: true })).toBeVisible();
-  await createdRow.getByRole("button", { name: "Delete" }).click();
+  await row.getByRole("button", { name: "Edit" }).click();
+  await newApiKey.fill(ROTATED_API_KEY);
+  await expect(form.getByText("Enter both the new API key and the new secret key", { exact: false })).toBeVisible();
+  await expect(saveChanges).toBeDisabled();
+  await form.getByRole("button", { name: "Cancel edit" }).click();
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(newApiKey).toHaveValue("");
+  await expect(newSecretKey).toHaveValue("");
+  await newApiKey.fill(ROTATED_API_KEY);
+  await newSecretKey.fill(ROTATED_SECRET_KEY);
+  await saveChanges.click();
+  await expect(page.getByRole("heading", { name: "Edit account registration" })).toHaveCount(0);
+  expect(accountWrites.slice(1)).toEqual([
+    {
+      method: "PATCH",
+      path: accountPath,
+      body: { credentials: { source: "managed", api_key: ROTATED_API_KEY, secret_key: ROTATED_SECRET_KEY } },
+    },
+  ]);
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(newApiKey).toHaveValue("");
+  await expect(newSecretKey).toHaveValue("");
+  await form.getByRole("button", { name: "Cancel edit" }).click();
+
+  await row.getByText("Rotation desk renamed", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Rotation desk renamed" })).toBeVisible();
+  await expect(page.getByText("Stored by this application", { exact: true })).toBeVisible();
+  await expect(page.getByText(`ALPACA_CONNECTORS__${created.unique_identifier}__API_KEY`, { exact: true })).toBeVisible();
+  await expect(page.getByText(`ALPACA_CONNECTORS__${created.unique_identifier}__SECRET_KEY`, { exact: true })).toBeVisible();
+  await expect(page.getByText("Credentials updated", { exact: true })).toBeVisible();
+  await expect(page.getByText(ROTATED_API_KEY)).toHaveCount(0);
+  await page.getByRole("button", { name: "Back to accounts" }).click();
+
+  await row.getByRole("button", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog", { name: "Remove account registration" });
+  await expect(dialog).toContainText("delete its stored credentials");
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(createdRow).toHaveCount(0);
+  await expect(row).toHaveCount(0);
+  await expect(page.getByText(
+    `Deleted stored credential Secrets: ALPACA_CONNECTORS__${created.unique_identifier}__API_KEY`,
+    { exact: false },
+  )).toBeVisible();
+  expectNoCredentialLeak(requestUrls, [ROTATED_API_KEY, ROTATED_SECRET_KEY]);
+});
+
+test("shows an Alpaca credential rejection without enabling registration", async ({ page }) => {
+  const registrationRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/v1/accounts") {
+      registrationRequests.push(request.url());
+    }
+  });
+  await page.route("**/v1/accounts/registration/preflight", async (route) => {
+    await route.fulfill({
+      status: 400,
+      contentType: "application/json",
+      json: {
+        detail: {
+          code: "alpaca_credentials_rejected",
+          message: "Alpaca rejected the supplied credentials.",
+          retryable: false,
+        },
+      },
+    });
+  });
+
+  await page.goto("/accounts");
+  await page.getByRole("button", { name: "Register account", exact: true }).click();
+  const form = page.locator("form.workflow-form");
+  const rejection = form.getByText("Alpaca rejected these credentials.", { exact: false });
+  await form.getByLabel("Account name").fill("Rejected paper account");
+  await form.getByLabel("API key", { exact: true }).fill(LIVE_API_KEY);
+  await form.getByLabel("Secret key", { exact: true }).fill(LIVE_SECRET_KEY);
+  await form.getByRole("button", { name: "Review registration" }).click();
+
+  await expect(rejection).toBeVisible();
+  await expect(rejection).toContainText("paper trading account");
+  await expect(page.getByRole("dialog", { name: "Account request failed" })).toHaveCount(0);
+  await expect(form.getByRole("region", { name: "Registration review" })).toHaveCount(0);
+  await expect(form.getByRole("button", { name: "Register account" })).toBeDisabled();
+  await form.getByLabel("Secret key", { exact: true }).fill(ROTATED_SECRET_KEY);
+  await expect(rejection).toHaveCount(0);
+  expect(registrationRequests).toHaveLength(0);
+});
+
+test("blocks registration when the review reports unresolved holdings", async ({ page }) => {
+  const registrationRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/v1/accounts") {
+      registrationRequests.push(request.url());
+    }
+  });
+  await page.route("**/v1/accounts/registration/preflight", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        account_unique_identifier: "PA0000000003__ALPACA_PAPER",
+        account_number: "PA0000000003",
+        status: "ACTIVE",
+        is_paper: true,
+        credential_source: "managed",
+        api_key_secret_name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__API_KEY",
+        secret_key_secret_name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__SECRET_KEY",
+        secret_writes: [
+          { name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__API_KEY", action: "update" },
+          { name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__SECRET_KEY", action: "update" },
+        ],
+        equity: "1000",
+        cash: "0",
+        would_write_holdings: 1,
+        unresolved_symbols: ["33333333-3333-4333-8333-333333333333"],
+        alpaca_asset_ids_to_register: [],
+        cash_asset_identifiers_to_ensure: [],
+      },
+    });
+  });
+
+  await page.goto("/accounts");
+  await page.getByRole("button", { name: "Register account", exact: true }).click();
+  const registrationForm = page.locator("form.workflow-form");
+  await registrationForm.getByLabel("Account name").fill("Blocked paper account");
+  await registrationForm.getByLabel("API key", { exact: true }).fill(LIVE_API_KEY);
+  await registrationForm.getByLabel("Secret key", { exact: true }).fill(LIVE_SECRET_KEY);
+  await registrationForm.getByRole("button", { name: "Review registration" }).click();
+
+  const review = registrationForm.getByRole("region", { name: "Registration review" });
+  await expect(review.getByText("Blocked", { exact: true })).toBeVisible();
+  await expect(review.getByText("33333333-3333-4333-8333-333333333333", { exact: true })).toBeVisible();
+  await expect(review.getByText("None.", { exact: true })).toHaveCount(2);
+  await expect(review.getByText("Update", { exact: true })).toHaveCount(2);
+  await expect(registrationForm.getByRole("button", { name: "Register account" })).toBeDisabled();
+  await assertCommandCenterPageLayout(page);
+  expect(registrationRequests).toHaveLength(0);
 });
 
 test("loads only the selected account's latest holdings after row activation", async ({ page }) => {
@@ -124,6 +352,10 @@ test("loads only the selected account's latest holdings after row activation", a
   await accountRow.getByText("Paper account", { exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "Paper account" })).toBeVisible();
+  await expect(page.getByText("External Main Sequence Secrets", { exact: true })).toBeVisible();
+  await expect(page.getByText("ALPACA_PAPER_API_KEY", { exact: true })).toBeVisible();
+  await expect(page.getByText("ALPACA_PAPER_SECRET_KEY", { exact: true })).toBeVisible();
+  await expect(page.getByText("Not recorded", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Latest holdings" })).toBeVisible();
   await expect(page.getByRole("row", { name: /AAPL/ })).toContainText("125");
   await expect(page.getByRole("row", { name: /USD/ })).toContainText("25,000");
@@ -181,9 +413,7 @@ test("plans asset registration, creates a universe, and extracts its components"
 
   const diaRow = page.getByRole("row", { name: /Dow Jones ETF holdings/ });
   await expect(diaRow).toContainText("0");
-  await diaRow.click({ button: "right" });
-  const contextMenu = page.getByRole("menu", { name: "Actions for Dow Jones ETF holdings" });
-  await contextMenu.getByRole("menuitem", { name: "Extract components", exact: true }).click();
+  await selectRowAction(page, diaRow, "Extract components");
   const dialog = page.getByRole("dialog", { name: "Extract universe components" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("This action does not update market-data bars.", { exact: false })).toBeVisible();
@@ -193,7 +423,7 @@ test("plans asset registration, creates a universe, and extracts its components"
   await expect(diaRow).toContainText("3");
 });
 
-test("lists registered universes and runs lifecycle actions from the row context menu", async ({ page }) => {
+test("lists registered universes and runs lifecycle actions from the row action menu", async ({ page }) => {
   const requestedPaths: string[] = [];
   page.on("request", (request) => requestedPaths.push(new URL(request.url()).pathname));
   await page.goto("/universes");
@@ -206,13 +436,12 @@ test("lists registered universes and runs lifecycle actions from the row context
 
   const ivvRow = page.getByRole("row", { name: /S&P 500 holdings/ });
   await expect(ivvRow.getByText("Active", { exact: true })).toBeVisible();
-  await ivvRow.click({ button: "right" });
-
-  let contextMenu = page.getByRole("menu", { name: "Actions for S&P 500 holdings" });
-  await expect(contextMenu).toBeVisible();
-  await expect(contextMenu.getByRole("menuitem", { name: "Extract components", exact: true })).toBeEnabled();
-  await expect(contextMenu.getByRole("menuitem", { name: "Activate", exact: true })).toBeDisabled();
-  await contextMenu.getByRole("menuitem", { name: "Deactivate", exact: true }).click();
+  await ivvRow.getByRole("button", { name: "Actions", exact: true }).click();
+  let actionMenu = page.getByRole("menu", { name: "Actions", exact: true });
+  await expect(actionMenu).toBeVisible();
+  await expect(actionMenu.getByRole("menuitem", { name: "Extract components", exact: true })).toBeEnabled();
+  await expect(actionMenu.getByRole("menuitem", { name: "Activate", exact: true })).toBeDisabled();
+  await actionMenu.getByRole("menuitem", { name: "Deactivate", exact: true }).click();
 
   let dialog = page.getByRole("dialog", { name: "Deactivate universes" });
   await expect(dialog).toBeVisible();
@@ -220,18 +449,16 @@ test("lists registered universes and runs lifecycle actions from the row context
   await dialog.getByRole("button", { name: "Deactivate", exact: true }).click();
   await expect(ivvRow.getByText("Inactive", { exact: true })).toBeVisible();
 
-  await ivvRow.click({ button: "right" });
-  contextMenu = page.getByRole("menu", { name: "Actions for S&P 500 holdings" });
-  await expect(contextMenu.getByRole("menuitem", { name: "Activate", exact: true })).toBeEnabled();
-  await contextMenu.getByRole("menuitem", { name: "Activate", exact: true }).click();
+  await ivvRow.getByRole("button", { name: "Actions", exact: true }).click();
+  actionMenu = page.getByRole("menu", { name: "Actions", exact: true });
+  await expect(actionMenu.getByRole("menuitem", { name: "Activate", exact: true })).toBeEnabled();
+  await actionMenu.getByRole("menuitem", { name: "Activate", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "Activate" });
   await dialog.getByRole("button", { name: "Activate", exact: true }).click();
   await expect(ivvRow.getByText("Active", { exact: true })).toBeVisible();
 
   const qqqRow = page.getByRole("row", { name: /Nasdaq 100 holdings/ });
-  await qqqRow.click({ button: "right" });
-  contextMenu = page.getByRole("menu", { name: "Actions for Nasdaq 100 holdings" });
-  await contextMenu.getByRole("menuitem", { name: "Delete" }).click();
+  await selectRowAction(page, qqqRow, "Delete");
   dialog = page.getByRole("dialog", { name: "Delete universes" });
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
@@ -395,11 +622,11 @@ test("creates one dedicated Job configuration per ETF signal and manages its lif
   let createdRow = page.getByRole("row", { name: /Scheduled IWM observation/ });
   await expect(createdRow).toContainText("Every 1 days");
   await expect(createdRow).toContainText("ready");
-  await createdRow.getByRole("button", { name: "Run now" }).click();
+  await selectRowAction(page, createdRow, "Run now");
   await expect(page.getByRole("heading", { name: /Scheduled IWM observation: run completed/ })).toBeVisible();
 
   createdRow = page.getByRole("row", { name: /Scheduled IWM observation/ });
-  await createdRow.getByRole("button", { name: "Edit" }).click();
+  await selectRowAction(page, createdRow, "Edit");
   await expect(page.getByRole("heading", { name: "Edit signal" })).toBeVisible();
   await page.getByLabel("Signal name").fill("Scheduled IWM observation updated");
   await page.getByLabel("Enabled and scheduled").uncheck();
@@ -411,7 +638,7 @@ test("creates one dedicated Job configuration per ETF signal and manages its lif
   await expect(createdRow.getByRole("button", { name: "Pause" })).toHaveCount(0);
   await expect(createdRow.getByRole("button", { name: "Resume" })).toHaveCount(0);
   await expect(createdRow.getByRole("button", { name: "Reconcile" })).toHaveCount(0);
-  await createdRow.getByRole("button", { name: "Delete" }).click();
+  await selectRowAction(page, createdRow, "Delete");
   const dialog = page.getByRole("dialog", { name: "Delete signal Job" });
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
@@ -561,18 +788,18 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
 
   let createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio/ });
   await expect(createdRow).toContainText("ImmediateSignal");
-  await createdRow.getByRole("button", { name: "Run now" }).click();
+  await selectRowAction(page, createdRow, "Run now");
   await expect(page.getByRole("heading", { name: /Daily observed IVV portfolio: JobRun/ })).toBeVisible();
 
   createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio/ });
-  await createdRow.getByRole("button", { name: "Edit" }).click();
+  await selectRowAction(page, createdRow, "Edit");
   await expect(page.getByRole("heading", { name: "Edit portfolio" })).toBeVisible();
   await page.getByLabel("Portfolio name").fill("Daily observed IVV portfolio updated");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByRole("heading", { name: "Updated Daily observed IVV portfolio updated." })).toBeVisible();
 
   createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio updated/ });
-  await createdRow.getByRole("button", { name: "Delete" }).click();
+  await selectRowAction(page, createdRow, "Delete");
   const dialog = page.getByRole("dialog", { name: "Delete portfolio configuration and Job" });
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();

@@ -35,8 +35,12 @@ lifecycle live in `src/transport.ts`. The page code orchestrates these contracts
 duplicate registration, holdings extraction, Asset Universe Run behavior, or platform logic. An
 `AssetUniverse.uid` is the action and bars-configuration identity; `source_uid` and
 `asset_category_uid` remain explicit linked identities.
-Account credential fields contain Secret names only. The read-only Secret-reference endpoint
-returns names and never serializes values into the browser.
+Account registration and credential rotation send the Alpaca API key and secret key once, as
+write-only request fields (`credentials.source = "managed"`). The API validates them with Alpaca and
+stores them as Main Sequence Secrets it owns; account responses carry only the credential source,
+Secret names and UIDs, and the last update time, never values. The values live only in the open
+form's component state and are never placed in a URL, browser storage, persisted view state, or
+console output. The site does not call the Secret-reference endpoint.
 
 Asset registration uses the API's persisted operation contract. The initial `POST` returns `202`
 with an operation UID and ordered step states. The application polls the operation-specific `GET`

@@ -82,7 +82,7 @@ const NAVIGATION: NavigationApplicationDefinition = {
           label: "Accounts",
           href: "/accounts",
           icon: Landmark,
-          description: "Register accounts by Secret reference",
+          description: "Register accounts with their Alpaca API keys",
         },
         {
           id: "universes",

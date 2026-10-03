@@ -5,7 +5,7 @@ It does not expand ETF seeds. Constituent discovery belongs to a registered univ
 when that universe is run.
 
 Asset registration requires an active registered Alpaca account. The page sends only its Account UID; the
-API resolves the Main Sequence Secret names stored on that account and never receives credential
+API resolves the Main Sequence Secrets referenced by that account and never receives credential
 values from the browser.
 
 Build a plan first. The API accepts the work as an observable operation and the page follows its

@@ -16,24 +16,25 @@ import {
   ResourceDetailShell,
   ResourceIconLabelCell,
   ResourceListPage,
-  ResourcePicker,
   ResourceStatusCell,
-  type ResourcePickerOption,
   type ResourceRowAction,
 } from "@dev-mainsequence/command-center-sdk/views";
 import { Landmark, ShieldCheck, WalletCards } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 
 import {
   API_ENDPOINTS,
+  ApiResponseError,
   createApiClient,
   type Account,
+  type AccountDeleteResponse,
   type AccountHolding,
+  type AccountRegistrationPreflightResponse,
   type AccountRegistrationRequest,
   type AccountUpdateRequest,
   type ApiTransport,
+  type ManagedAlpacaCredentials,
   type ResourceCollection,
-  type SecretReference,
 } from "./api";
 import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
 
@@ -41,7 +42,7 @@ type MutationState =
   | { state: "idle" }
   | { state: "loading"; label: string }
   | { state: "error"; message: string }
-  | { state: "success"; message: string };
+  | { state: "success"; message: string; details?: string[]; warnings?: string[] };
 
 function formatError(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") return "Request cancelled.";
@@ -357,7 +358,23 @@ function AccountHoldingsDetail({
               { key: "identifier", label: "Identifier", value: account.unique_identifier },
               { key: "last-refresh", label: "Last refresh", value: formatSnapshotTime(account.snapshot_time) },
             ],
-            highlight_fields: [],
+            // Secret names and timestamps only; credential values are never returned by the API.
+            highlight_fields: [
+              {
+                key: "credential-source",
+                label: "Credentials",
+                value: credentialSourceLabel(account.credential_source),
+              },
+              { key: "api-key-secret", label: "API key Secret", value: account.api_key_secret_name },
+              { key: "secret-key-secret", label: "Secret key Secret", value: account.secret_key_secret_name },
+              {
+                key: "credentials-updated",
+                label: "Credentials updated",
+                value: account.credentials_updated_at
+                  ? formatSnapshotTime(account.credentials_updated_at)
+                  : "Not recorded",
+              },
+            ],
             stats: [
               {
                 key: "equity",
@@ -388,37 +405,196 @@ function AccountHoldingsDetail({
   );
 }
 
-function secretPickerOptions(
-  references: readonly SecretReference[],
-  selectedName: string,
-): ResourcePickerOption[] {
-  const names = new Set(references.map((reference) => reference.name));
-  if (selectedName) names.add(selectedName);
-  return Array.from(names)
-    .sort((left, right) => left.localeCompare(right))
-    .map((name) => ({
-      value: name,
-      label: name,
-      subtitle: name === selectedName && !references.some((item) => item.name === name)
-        ? "Currently configured"
-        : undefined,
-    }));
+function credentialSourceLabel(source: Account["credential_source"]): string {
+  return source === "managed" ? "Stored by this application" : "External Main Sequence Secrets";
+}
+
+// Client-side checks only; the API validates the values against Alpaca before storing them.
+function credentialInputError(apiKey: string, secretKey: string, rotating: boolean): string | null {
+  const apiKeyValue = apiKey.trim();
+  const secretKeyValue = secretKey.trim();
+  if (!apiKeyValue || !secretKeyValue) {
+    return rotating
+      ? "Enter both the new API key and the new secret key, or leave both empty to keep the current credentials."
+      : "Enter both the Alpaca API key and the secret key.";
+  }
+  if (apiKeyValue === secretKeyValue) return "The API key and the secret key must be different values.";
+  return null;
+}
+
+function managedCredentials(apiKey: string, secretKey: string): ManagedAlpacaCredentials {
+  return { source: "managed", api_key: apiKey.trim(), secret_key: secretKey.trim() };
+}
+
+// PATCH only what changed. Name and active-state changes never carry `credentials`, so they work
+// even when the stored keys no longer authenticate.
+function accountUpdateRequest(
+  account: Account,
+  values: { account_name: string; account_is_active: boolean },
+): AccountUpdateRequest {
+  const request: AccountUpdateRequest = {};
+  if (values.account_name !== account.account_name) request.account_name = values.account_name;
+  if (values.account_is_active !== account.account_is_active) {
+    request.account_is_active = values.account_is_active;
+  }
+  return request;
+}
+
+function AlpacaCredentialFields({
+  apiKey,
+  apiKeyLabel,
+  disabled,
+  secretKey,
+  secretKeyLabel,
+  onApiKeyChange,
+  onSecretKeyChange,
+}: {
+  apiKey: string;
+  apiKeyLabel: string;
+  disabled: boolean;
+  secretKey: string;
+  secretKeyLabel: string;
+  onApiKeyChange: (value: string) => void;
+  onSecretKeyChange: (value: string) => void;
+}) {
+  return (
+    <>
+      <label className="field">{apiKeyLabel}
+        <input
+          type="password"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          value={apiKey}
+          onChange={(event) => onApiKeyChange(event.target.value)}
+          disabled={disabled}
+        />
+      </label>
+      <label className="field">{secretKeyLabel}
+        <input
+          type="password"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          value={secretKey}
+          onChange={(event) => onSecretKeyChange(event.target.value)}
+          disabled={disabled}
+        />
+      </label>
+    </>
+  );
+}
+
+function ReviewValueList({ label, values }: { label: string; values: readonly string[] }) {
+  return (
+    <div className="result-group">
+      <h4>{label}</h4>
+      {values.length ? (
+        <div className="tag-list">
+          {values.map((value) => <span className="tag" key={value}>{value}</span>)}
+        </div>
+      ) : (
+        <p className="form-note">None.</p>
+      )}
+    </div>
+  );
+}
+
+function AccountRegistrationReview({ plan }: { plan: AccountRegistrationPreflightResponse }) {
+  const blocked = plan.unresolved_symbols.length > 0;
+  return (
+    <ApplicationCard
+      surface="nested"
+      aria-label="Registration review"
+      header={(
+        <div className="card-title-row">
+          <h3>Registration review</h3>
+          <span className={`status-pill status-pill--${blocked ? "warning" : "success"}`}>
+            {blocked ? "Blocked" : "Ready"}
+          </span>
+        </div>
+      )}
+    >
+      <dl className="summary-list">
+        <div>
+          <dt>Account identifier</dt>
+          <dd>{plan.account_unique_identifier}</dd>
+        </div>
+        <div>
+          <dt>Account number</dt>
+          <dd>{plan.account_number || "—"}</dd>
+        </div>
+        <div>
+          <dt>Alpaca status</dt>
+          <dd>{plan.status || "—"}</dd>
+        </div>
+        <div>
+          <dt>Environment</dt>
+          <dd>{plan.is_paper ? "Paper" : "Live"}</dd>
+        </div>
+        <div>
+          <dt>Equity</dt>
+          <dd>{formatAccountValue(plan.equity, null)}</dd>
+        </div>
+        <div>
+          <dt>Cash</dt>
+          <dd>{formatAccountValue(plan.cash, null)}</dd>
+        </div>
+        <div>
+          <dt>Holdings rows to write</dt>
+          <dd>{plan.would_write_holdings}</dd>
+        </div>
+      </dl>
+      <ReviewValueList label="Unresolved symbols" values={plan.unresolved_symbols} />
+      <ReviewValueList label="Alpaca assets to register" values={plan.alpaca_asset_ids_to_register} />
+      <ReviewValueList label="Cash assets to ensure" values={plan.cash_asset_identifiers_to_ensure} />
+      <div className="result-group">
+        <h4>Credential Secrets to store</h4>
+        {plan.secret_writes.length ? (
+          <dl className="summary-list summary-list--single-column">
+            {plan.secret_writes.map((write) => (
+              <div key={write.name}>
+                <dt>{write.action === "create" ? "Create" : "Update"}</dt>
+                <dd>{write.name}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="form-note">None.</p>
+        )}
+        <p className="form-note">
+          The review writes nothing. The keys are stored in these Main Sequence Secrets only when
+          the account is registered.
+        </p>
+      </div>
+      {blocked ? (
+        <p className="form-error" role="alert">
+          Registration is blocked because these holdings do not resolve to an Alpaca asset identity.
+        </p>
+      ) : null}
+    </ApplicationCard>
+  );
 }
 
 export function AccountsPage({ transport }: { transport: ApiTransport }) {
   const api = useMemo(() => createApiClient(transport), [transport]);
-  const [secretReferences, setSecretReferences] = useState<SecretReference[]>([]);
-  const [secretsLoading, setSecretsLoading] = useState(false);
-  const [secretsError, setSecretsError] = useState<string | null>(null);
-  const [secretSearch, setSecretSearch] = useState("");
-  const [secretLookupRevision, setSecretLookupRevision] = useState(0);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Account | null>(null);
   const [accountName, setAccountName] = useState("");
   const [environment, setEnvironment] = useState<"paper" | "live">("paper");
-  const [apiKeySecretName, setApiKeySecretName] = useState("");
-  const [secretKeySecretName, setSecretKeySecretName] = useState("");
   const [accountIsActive, setAccountIsActive] = useState(true);
+  // Credential values live only in this component's state: they are cleared on success and
+  // cancel, discarded with the component on unmount, and never written to a URL or storage.
+  const [apiKey, setApiKey] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [credentialsError, setCredentialsError] = useState<string | null>(null);
+  // Bumped on every input change; a review is valid only for the revision it ran with, so no
+  // copy of the credential values is kept to detect changes.
+  const [inputRevision, setInputRevision] = useState(0);
+  const [preflight, setPreflight] = useState<{
+    revision: number;
+    plan: AccountRegistrationPreflightResponse;
+  } | null>(null);
   const [mutation, setMutation] = useState<MutationState>({ state: "idle" });
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
@@ -427,71 +603,43 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
   const [deletePending, setDeletePending] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!formOpen) return;
-    const controller = new AbortController();
-    const search = secretSearch.trim();
-    setSecretsLoading(true);
-    setSecretsError(null);
-    const timer = window.setTimeout(() => {
-      api.get<ResourceCollection<SecretReference>>(
-        withQuery(API_ENDPOINTS.accountSecretReferences, {
-          limit: 100,
-          offset: 0,
-          search,
-        }),
-        controller.signal,
-      )
-        .then((response) => setSecretReferences(response.items))
-        .catch((error: unknown) => {
-          if (!controller.signal.aborted) setSecretsError(formatError(error));
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setSecretsLoading(false);
-        });
-    }, search ? 150 : 0);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [api, formOpen, secretLookupRevision, secretSearch]);
-
-  const refreshSecretLookup = () => {
-    setSecretLookupRevision((current) => current + 1);
-  };
-
-  const apiKeyOptions = useMemo(
-    () => secretPickerOptions(secretReferences, apiKeySecretName),
-    [apiKeySecretName, secretReferences],
-  );
-  const secretKeyOptions = useMemo(
-    () => secretPickerOptions(secretReferences, secretKeySecretName),
-    [secretKeySecretName, secretReferences],
-  );
+  const reviewedPlan = !editing && preflight?.revision === inputRevision ? preflight.plan : null;
+  const rotatingCredentials = editing !== null && Boolean(apiKey.trim() || secretKey.trim());
+  const credentialError = editing
+    ? rotatingCredentials ? credentialInputError(apiKey, secretKey, true) : null
+    : credentialInputError(apiKey, secretKey, false);
+  const inputError = accountName.trim() ? credentialError : "Enter an account name.";
+  const accountChanges = editing
+    ? accountUpdateRequest(editing, {
+      account_name: accountName.trim(),
+      account_is_active: accountIsActive,
+    })
+    : null;
+  const hasAccountChanges = accountChanges !== null
+    && (Object.keys(accountChanges).length > 0 || rotatingCredentials);
   const busy = mutation.state === "loading";
-  const canSubmit = !busy
-    && !secretsLoading
-    && !secretsError
-    && Boolean(accountName.trim())
-    && Boolean(apiKeySecretName)
-    && Boolean(secretKeySecretName)
-    && apiKeySecretName !== secretKeySecretName;
+  const canSubmit = !busy && inputError === null && (editing === null || hasAccountChanges);
+  const canRegister = editing === null
+    && canSubmit
+    && reviewedPlan !== null
+    && reviewedPlan.unresolved_symbols.length === 0;
+  const showCredentialError = credentialError !== null
+    && (rotatingCredentials || Boolean(apiKey.trim() && secretKey.trim()));
 
   function resetForm() {
     setEditing(null);
     setAccountName("");
     setEnvironment("paper");
-    setApiKeySecretName("");
-    setSecretKeySecretName("");
     setAccountIsActive(true);
-    setSecretSearch("");
-    setSecretsError(null);
+    setApiKey("");
+    setSecretKey("");
+    setCredentialsError(null);
+    setPreflight(null);
   }
 
   function beginRegistration() {
     setSelectedAccount(null);
     resetForm();
-    setSecretsLoading(true);
     setFormOpen(true);
     setMutation({ state: "idle" });
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -500,70 +648,116 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
   function closeForm() {
     resetForm();
     setFormOpen(false);
-    setSecretsLoading(false);
     setMutation({ state: "idle" });
   }
 
   function beginEdit(account: Account) {
     setSelectedAccount(null);
-    setSecretSearch("");
-    setSecretsLoading(true);
-    setSecretLookupRevision((current) => current + 1);
     setFormOpen(true);
     setEditing(account);
     setAccountName(account.account_name);
     setEnvironment(account.is_paper ? "paper" : "live");
-    setApiKeySecretName(account.api_key_secret_name);
-    setSecretKeySecretName(account.secret_key_secret_name);
     setAccountIsActive(account.account_is_active);
+    setApiKey("");
+    setSecretKey("");
+    setCredentialsError(null);
+    setPreflight(null);
     setMutation({ state: "idle" });
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // A shown registration review describes the inputs it ran with; any change requires a new one.
+  function changeInput(apply: () => void, { credentials = false } = {}) {
+    apply();
+    setInputRevision((current) => current + 1);
+    setPreflight(null);
+    if (credentials) setCredentialsError(null);
+  }
+
+  function completeFormMutation(action: "Registered" | "Updated") {
+    const completedName = accountName.trim();
+    resetForm();
+    setFormOpen(false);
+    setMutation({ state: "success", message: `${action} ${completedName}.` });
+    setRefreshKey((current) => current + 1);
+  }
+
+  function failRequest(error: unknown) {
+    if (error instanceof ApiResponseError && error.code === "alpaca_credentials_rejected") {
+      setPreflight(null);
+      setCredentialsError(
+        `Alpaca rejected these credentials. Check that both keys are correct and belong to a ${environment} trading account.`,
+      );
+      setMutation({ state: "idle" });
+      return;
+    }
+    setMutation({ state: "error", message: formatError(error) });
+  }
+
+  function registrationRequest(): AccountRegistrationRequest {
+    return {
+      account_name: accountName.trim(),
+      environment,
+      credentials: managedCredentials(apiKey, secretKey),
+    };
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!canSubmit) {
-      setMutation({
-        state: "error",
-        message: apiKeySecretName === secretKeySecretName
-          ? "Choose two different Main Sequence Secrets."
-          : "Complete the account name and both Secret references.",
-      });
+      setMutation({ state: "error", message: inputError ?? "No changes to save." });
       return;
     }
 
-    setMutation({ state: "loading", label: editing ? "Updating account" : "Registering account" });
-    try {
-      if (editing) {
-        const request: AccountUpdateRequest = {
-          account_name: accountName.trim(),
-          api_key_secret_name: apiKeySecretName,
-          secret_key_secret_name: secretKeySecretName,
-          account_is_active: accountIsActive,
-        };
-        await api.patch<Account>(
-          `${API_ENDPOINTS.accounts}/${encodeURIComponent(editing.uid)}`,
-          request,
-        );
-      } else {
-        const request: AccountRegistrationRequest = {
-          account_name: accountName.trim(),
-          environment,
-          api_key_secret_name: apiKeySecretName,
-          secret_key_secret_name: secretKeySecretName,
-        };
-        await api.post<Account>(API_ENDPOINTS.accounts, request);
-      }
+    if (!editing) {
+      await reviewRegistration();
+      return;
+    }
 
-      const completedName = accountName.trim();
-      const completedAction = editing ? "Updated" : "Registered";
-      resetForm();
-      setFormOpen(false);
-      setSecretsLoading(false);
-      setMutation({ state: "success", message: `${completedAction} ${completedName}.` });
-      setRefreshKey((current) => current + 1);
+    const request: AccountUpdateRequest = rotatingCredentials
+      ? { ...accountChanges, credentials: managedCredentials(apiKey, secretKey) }
+      : { ...accountChanges };
+    setCredentialsError(null);
+    setMutation({
+      state: "loading",
+      label: rotatingCredentials ? "Validating and rotating credentials" : "Updating account",
+    });
+    try {
+      await api.patch<Account>(
+        `${API_ENDPOINTS.accounts}/${encodeURIComponent(editing.uid)}`,
+        request,
+      );
+      completeFormMutation("Updated");
     } catch (error) {
-      setMutation({ state: "error", message: formatError(error) });
+      failRequest(error);
+    }
+  }
+
+  async function reviewRegistration() {
+    const revision = inputRevision;
+    setPreflight(null);
+    setCredentialsError(null);
+    setMutation({ state: "loading", label: "Checking credentials with Alpaca" });
+    try {
+      const plan = await api.post<AccountRegistrationPreflightResponse>(
+        API_ENDPOINTS.accountRegistrationPreflight,
+        registrationRequest(),
+      );
+      setPreflight({ revision, plan });
+      setMutation({ state: "idle" });
+    } catch (error) {
+      failRequest(error);
+    }
+  }
+
+  async function register() {
+    if (!canRegister) return;
+    setMutation({ state: "loading", label: "Registering account" });
+    try {
+      await api.post<Account>(API_ENDPOINTS.accounts, registrationRequest());
+      completeFormMutation("Registered");
+    } catch (error) {
+      failRequest(error);
     }
   }
 
@@ -578,19 +772,26 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
     setDeletePending(true);
     setDeleteError(null);
     try {
-      await api.delete<Record<string, unknown>>(
+      const result = await api.delete<AccountDeleteResponse>(
         `${API_ENDPOINTS.accounts}/${encodeURIComponent(deleteTarget.uid)}`,
       );
       const deletedName = deleteTarget.account_name;
+      const deletedSecrets = result.deleted_secrets ?? [];
       if (editing?.uid === deleteTarget.uid) {
         resetForm();
         setFormOpen(false);
-        setSecretsLoading(false);
       }
       if (selectedAccount?.uid === deleteTarget.uid) setSelectedAccount(null);
       setDeleteTarget(null);
       setDeleteConfirmation("");
-      setMutation({ state: "success", message: `Removed ${deletedName}.` });
+      setMutation({
+        state: "success",
+        message: `Removed ${deletedName}.`,
+        details: deletedSecrets.length
+          ? [`Deleted stored credential Secrets: ${deletedSecrets.join(", ")}.`]
+          : [],
+        warnings: result.warnings ?? [],
+      });
       setRefreshKey((current) => current + 1);
     } catch (error) {
       setDeleteError(formatError(error));
@@ -599,13 +800,15 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
     }
   }
 
+  const deletingManagedAccount = deleteTarget?.credential_source === "managed";
+
   return (
     <ApplicationPage as="main" maxWidth="full">
       <ApplicationPageStack>
         <ApplicationPageHeader
           eyebrow="Accounts"
           title="Alpaca account registrations"
-          description="Register and maintain brokerage accounts by selecting the Main Sequence Secrets that hold their Alpaca credentials."
+          description="Register and maintain brokerage accounts with their Alpaca API keys. The API checks the keys with Alpaca and stores them as Main Sequence Secrets."
         />
 
         {formOpen ? (
@@ -615,7 +818,7 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
               <label className="field">Account name
                 <input
                   value={accountName}
-                  onChange={(event) => setAccountName(event.target.value)}
+                  onChange={(event) => changeInput(() => setAccountName(event.target.value))}
                   placeholder="US equities paper account"
                   disabled={busy}
                 />
@@ -623,7 +826,10 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
               <label className="field">Environment
                 <select
                   value={environment}
-                  onChange={(event) => setEnvironment(event.target.value as "paper" | "live")}
+                  onChange={(event) => changeInput(
+                    () => setEnvironment(event.target.value as "paper" | "live"),
+                    { credentials: true },
+                  )}
                   disabled={busy || editing !== null}
                 >
                   <option value="paper">Paper</option>
@@ -631,94 +837,92 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
                 </select>
                 {editing ? <span>The environment is fixed after registration.</span> : null}
               </label>
-              <div className="field resource-picker-field">
-                <label id="api-key-secret-label">API key Secret</label>
-                <ResourcePicker
-                  ariaLabelledBy="api-key-secret-label"
-                  disabled={busy || secretsError !== null}
-                  emptyMessage={secretSearch.trim()
-                    ? "No visible Main Sequence Secrets match this name."
-                    : "No visible Main Sequence Secrets."}
-                  fullWidth
-                  loading={secretsLoading}
-                  mode="single"
-                  onOpenChange={(open) => {
-                    if (open) refreshSecretLookup();
-                  }}
-                  onSearchValueChange={setSecretSearch}
-                  options={apiKeyOptions}
-                  placeholder="Select the Secret containing the API key"
-                  searchable
-                  searchPlaceholder="Search Secret names"
-                  searchValue={secretSearch}
-                  value={apiKeySecretName || null}
-                  onValueChange={setApiKeySecretName}
+              {editing ? null : (
+                <AlpacaCredentialFields
+                  apiKey={apiKey}
+                  apiKeyLabel="API key"
+                  disabled={busy}
+                  secretKey={secretKey}
+                  secretKeyLabel="Secret key"
+                  onApiKeyChange={(value) => changeInput(() => setApiKey(value), { credentials: true })}
+                  onSecretKeyChange={(value) => changeInput(() => setSecretKey(value), { credentials: true })}
                 />
-              </div>
-              <div className="field resource-picker-field">
-                <label id="secret-key-secret-label">Secret key Secret</label>
-                <ResourcePicker
-                  ariaLabelledBy="secret-key-secret-label"
-                  disabled={busy || secretsError !== null}
-                  emptyMessage={secretSearch.trim()
-                    ? "No visible Main Sequence Secrets match this name."
-                    : "No visible Main Sequence Secrets."}
-                  fullWidth
-                  loading={secretsLoading}
-                  mode="single"
-                  onOpenChange={(open) => {
-                    if (open) refreshSecretLookup();
-                  }}
-                  onSearchValueChange={setSecretSearch}
-                  options={secretKeyOptions}
-                  placeholder="Select the Secret containing the secret key"
-                  searchable
-                  searchPlaceholder="Search Secret names"
-                  searchValue={secretSearch}
-                  value={secretKeySecretName || null}
-                  onValueChange={setSecretKeySecretName}
-                />
-              </div>
+              )}
             </div>
 
             {editing ? (
-              <label className="checkbox-field">
-                <input
-                  type="checkbox"
-                  checked={accountIsActive}
-                  onChange={(event) => setAccountIsActive(event.target.checked)}
-                  disabled={busy}
-                />
-                Active
-              </label>
+              <>
+                <label className="checkbox-field">
+                  <input
+                    type="checkbox"
+                    checked={accountIsActive}
+                    onChange={(event) => setAccountIsActive(event.target.checked)}
+                    disabled={busy}
+                  />
+                  Active
+                </label>
+                <section className="workflow-form-section" aria-labelledby="rotate-credentials-heading">
+                  <div className="workflow-form-section__header">
+                    <h3 id="rotate-credentials-heading">Rotate credentials</h3>
+                    <p>
+                      Leave both fields empty to keep the current credentials. New keys must
+                      authenticate as the same Alpaca account and replace the stored values.
+                      {editing.credential_source === "external"
+                        ? " This account uses external Main Sequence Secrets; rotating stores the new keys in Secrets owned by this application and leaves the external Secrets unchanged."
+                        : null}
+                    </p>
+                  </div>
+                  <div className="form-grid">
+                    <AlpacaCredentialFields
+                      apiKey={apiKey}
+                      apiKeyLabel="New API key"
+                      disabled={busy}
+                      secretKey={secretKey}
+                      secretKeyLabel="New secret key"
+                      onApiKeyChange={(value) => changeInput(() => setApiKey(value), { credentials: true })}
+                      onSecretKeyChange={(value) => changeInput(() => setSecretKey(value), { credentials: true })}
+                    />
+                  </div>
+                </section>
+              </>
             ) : (
               <p className="form-note" role="note">
                 Registration resolves every non-zero holding, registers missing assets from their
                 immutable Alpaca UUIDs, and creates the initial holdings snapshot in the same flow.
                 OpenFIGI metadata is optional. An identity conflict names the affected asset and
-                writes no partial Account or snapshot.
+                writes no partial Account or snapshot. Review registration first checks the keys
+                with Alpaca in a read-only dry run that writes nothing; changing any field requires
+                a new review before the account can be registered.
               </p>
             )}
 
-            {secretsError ? (
-              <div className="inline-feedback" role="alert">
-                <p className="form-error">Secret references could not be loaded: {secretsError}</p>
-                <button className="button button--secondary" type="button" onClick={refreshSecretLookup}>
-                  Retry Secret lookup
-                </button>
-              </div>
+            {credentialsError ? <p className="form-error" role="alert">{credentialsError}</p> : null}
+            {showCredentialError ? <p className="form-error" role="alert">{credentialError}</p> : null}
+            {editing && !hasAccountChanges ? (
+              <p className="form-note" role="status">No changes to save.</p>
             ) : null}
-            {!secretsLoading && !secretsError && !secretSearch.trim() && secretReferences.length === 0 ? (
-              <p className="form-error" role="alert">Create and share the Alpaca credential Secrets in Main Sequence before registering an account.</p>
-            ) : null}
-            {apiKeySecretName && apiKeySecretName === secretKeySecretName ? (
-              <p className="form-error" role="alert">The API key and secret key must reference different Secrets.</p>
-            ) : null}
+            {reviewedPlan ? <AccountRegistrationReview plan={reviewedPlan} /> : null}
 
               <div className="form-actions">
-                <button className="button button--primary" type="submit" disabled={!canSubmit}>
-                  {editing ? "Save changes" : "Register account"}
-                </button>
+                {editing ? (
+                  <button className="button button--primary" type="submit" disabled={!canSubmit}>
+                    Save changes
+                  </button>
+                ) : (
+                  <>
+                    <button className="button button--secondary" type="submit" disabled={!canSubmit}>
+                      Review registration
+                    </button>
+                    <button
+                      className="button button--primary"
+                      type="button"
+                      disabled={!canRegister}
+                      onClick={() => void register()}
+                    >
+                      Register account
+                    </button>
+                  </>
+                )}
                 <button className="button button--secondary" type="button" onClick={closeForm} disabled={busy}>
                   {editing ? "Cancel edit" : "Cancel"}
                 </button>
@@ -727,7 +931,7 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
             <div className="workflow-guidance">
               <ShieldCheck aria-hidden="true" size={18} />
               <p>
-                This application stores only the selected Secret names. Credential values remain in Main Sequence and are resolved by the backend only when Alpaca access is required.
+                The API key and secret key are sent to the Alpaca Connectors API over the authenticated connection, checked with Alpaca, and stored as Main Sequence Secrets. They are never saved in this browser, and this application never displays them again.
               </p>
             </div>
             </form>
@@ -751,8 +955,18 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
           <section className="action-result" aria-live="polite">
             <div className="section-heading">
               <h3>{mutation.message}</h3>
-              <span className="status-pill status-pill--success">Complete</span>
+              {mutation.warnings?.length ? (
+                <span className="status-pill status-pill--warning">Completed with warnings</span>
+              ) : (
+                <span className="status-pill status-pill--success">Complete</span>
+              )}
             </div>
+            {mutation.details?.map((detail) => <p key={detail}>{detail}</p>)}
+            {mutation.warnings?.length ? (
+              <ul className="compact-list">
+                {mutation.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+              </ul>
+            ) : null}
           </section>
         ) : null}
 
@@ -780,8 +994,12 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
         actionLabel="Delete"
         title="Remove account registration"
         selectionLabel={deleteTarget?.account_name ?? "account"}
-        description="Remove this Alpaca registration and deactivate the account."
-        warning="Historical holdings snapshots are retained. Configurations that reference this account can no longer run."
+        description={deletingManagedAccount
+          ? "Remove this Alpaca registration, deactivate the account, and delete its stored credentials (the Main Sequence Secrets this application created for its API key and secret key)."
+          : "Remove this Alpaca registration and deactivate the account. The external Main Sequence Secrets it references are kept."}
+        warning={deletingManagedAccount
+          ? "The stored credentials cannot be recovered; registering the account again requires its keys. Historical holdings snapshots are retained. Configurations that reference this account can no longer run."
+          : "Historical holdings snapshots are retained. Configurations that reference this account can no longer run."}
         confirmationWord="DELETE"
         confirmationValue={deleteConfirmation}
         onConfirmationValueChange={setDeleteConfirmation}
