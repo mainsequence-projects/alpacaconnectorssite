@@ -26,8 +26,10 @@ This repository is the Command Center static-site application for the Alpaca Con
   execution context when it registers newly discovered constituents.
 - Bars: create, list, edit, and delete stored Alpaca bar configurations using registered accounts,
   exactly one asset source, and an already-migrated market-data profile.
-- Signals: create and operate one dedicated Main Sequence Job per Universe-backed signal
-  configuration; `account_uid` is runtime-only and JobRuns receive no business arguments.
+- Signals and portfolios: create and operate configurations that the connector's two
+  workflow-declared Jobs run (connector ADR 0013). Forms send only `scheduled` (whether the shared
+  Job's daily scheduled run includes the configuration), never schedule or compute settings; the
+  details pages show the shared Job's schedule read-only. `account_uid` is runtime-only.
 - Documentation: project-wide capability and configuration reference, plus workflow and technical
   guidance. Documentation is a footer application in the SDK navigation rail, not an application
   page or a custom link outside the rail.

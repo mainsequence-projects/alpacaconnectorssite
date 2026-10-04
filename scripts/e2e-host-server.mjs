@@ -206,6 +206,60 @@ let barConfigurations = [
     updated_at: "2026-01-01T00:00:00Z",
   },
 ];
+// The two Jobs alpaca-connectors declares in its API workflow (connector ADR 0013): every signal
+// configuration runs on the first and every portfolio configuration on the second.
+function declaredJob(uid, expression) {
+  return {
+    uid,
+    schedule_type: "crontab",
+    schedule_every: null,
+    schedule_period: null,
+    schedule_expression: expression,
+    schedule_timezone: "UTC",
+    schedule_timezone_explicit: true,
+    schedule_start_time: null,
+    cpu_request: "0.25",
+    memory_request: "0.5",
+    max_runtime_seconds: 3600,
+    spot: false,
+    image_status: "ready",
+    automatic_deployment: true,
+  };
+}
+const signalJob = declaredJob("job-alpaca-etf-signal", "30 0 * * *");
+const portfolioJob = declaredJob("job-alpaca-etf-portfolio", "0 2 * * *");
+const CONFIGURATION_JOBS_WORKFLOW = ".mainsequence/workflows/alpaca-connectors-api.yaml";
+const RETIRED_JOB_SETTINGS = [
+  "job",
+  "schedule_type",
+  "schedule_every",
+  "schedule_period",
+  "schedule_expression",
+  "schedule_timezone",
+  "schedule_start_time",
+  "cpu_request",
+  "memory_request",
+  "max_runtime_seconds",
+  "spot",
+  "enabled",
+];
+
+// Mirrors the API's 422 for the retired per-configuration Job settings.
+function retiredJobSettingsErrors(body) {
+  const retired = RETIRED_JOB_SETTINGS.filter((key) => key in body);
+  return retired.length
+    ? [{
+      loc: ["body"],
+      msg: `Value error, ${retired.join(", ")}: Job schedule and compute are declared in ${CONFIGURATION_JOBS_WORKFLOW} (ADR 0013); \`scheduled\` decides whether the Job's scheduled run includes this configuration.`,
+      type: "value_error",
+    }]
+    : [];
+}
+
+function signalLifecycle(configuration) {
+  return configuration.scheduled ? "ready" : "paused";
+}
+
 let signalJobs = [
   {
     uid: "signal-existing",
@@ -214,22 +268,10 @@ let signalJobs = [
     signal_uid: "signal-universe-ivv",
     universe_uid: "universe-ivv",
     account_uid: "account-paper",
-    job_uid: "job-signal-existing",
-    enabled: true,
-    schedule_type: "interval",
-    schedule_every: 1,
-    schedule_period: "days",
-    schedule_expression: null,
-    schedule_timezone: null,
-    schedule_start_time: null,
-    cpu_request: "0.25",
-    memory_request: "0.5",
-    max_runtime_seconds: 3600,
-    spot: false,
+    scheduled: true,
+    job_uid: signalJob.uid,
+    job: signalJob,
     lifecycle_state: "ready",
-    last_error: null,
-    job_image_status: "ready",
-    job_automatic_deployment: true,
     latest_run_status: null,
     latest_run_at: null,
     created_at: "2026-01-01T00:00:00Z",
@@ -257,7 +299,8 @@ let portfolioConfigurations = [
     rebalance_configuration_uid: "rebalance-immediate",
     rebalance_strategy: "immediate_signal",
     portfolio_uid: "portfolio-existing",
-    job_uid: "job-portfolio-existing",
+    scheduled: true,
+    job_uid: portfolioJob.uid,
     upsample_frequency_id: "1d",
     intraday_bar_interpolation_rule: "ffill",
     valuation_column: "close",
@@ -265,22 +308,7 @@ let portfolioConfigurations = [
     forward_fill_to_now: false,
     fail_on_missing_prices: true,
     commission_fee: 0.00018,
-    job: {
-      uid: "job-portfolio-existing",
-      schedule_type: "interval",
-      schedule_every: 1,
-      schedule_period: "days",
-      schedule_expression: null,
-      schedule_timezone: null,
-      schedule_timezone_explicit: null,
-      schedule_start_time: null,
-      cpu_request: "0.25",
-      memory_request: "0.5",
-      max_runtime_seconds: 3600,
-      spot: false,
-      image_status: "ready",
-      automatic_deployment: true,
-    },
+    job: portfolioJob,
     latest_run_status: "SUCCEEDED",
     latest_run_at: "2026-01-03T15:00:00Z",
     created_at: "2026-01-01T00:00:00Z",
@@ -324,7 +352,7 @@ function portfolioConfigurationDetail(configuration) {
     linked_signal: {
       name: "Daily IVV observation",
       description: "Observe current IVV constituents and weights.",
-      enabled: true,
+      scheduled: true,
       universe_name: "iShares Core S&P 500 ETF",
       universe_symbol: "IVV",
       account_name: "Paper brokerage",
@@ -1379,37 +1407,25 @@ createServer(async (request, response) => {
       resource: {
         id: "alpaca-etf-signal-jobs",
         label: "ETF Weight Signals",
-        item_label: "signal Job",
+        item_label: "signal configuration",
         identity: { fields: ["uid"] },
       },
       list: {
         controls: {
-          search: { placeholder: "Search etf signals", fields: ["name", "description"] },
+          search: { placeholder: "Search etf weight signals", fields: ["name", "description"] },
           filters: [
-            { key: "enabled", label: "Enabled", type: "boolean" },
-            {
-              key: "lifecycle_state",
-              label: "Lifecycle State",
-              type: "select",
-              options: [
-                { value: "ready", label: "Ready" },
-                { value: "paused", label: "Paused" },
-                { value: "provisioning", label: "Provisioning" },
-                { value: "error", label: "Error" },
-              ],
-            },
+            { key: "scheduled", label: "Scheduled", type: "boolean" },
           ],
-          ordering: ["name", "updated_at", "lifecycle_state"],
+          ordering: ["name", "updated_at"],
         },
         columns: [
           { id: "name", header: "Signal", value_path: "name", data_type: "text", default_visible: true, hideable: false, sortable_key: "name" },
           { id: "signal-uid", header: "Signal UID", value_path: "signal_uid", data_type: "text", default_visible: true, hideable: true },
           { id: "lifecycle-state", header: "State", value_path: "lifecycle_state", data_type: "text", default_visible: true, hideable: true },
-          { id: "schedule-type", header: "Schedule", value_path: "schedule_type", data_type: "text", default_visible: true, hideable: true },
-          { id: "job-image-status", header: "Image", value_path: "job_image_status", data_type: "text", default_visible: true, hideable: true },
+          { id: "job-image-status", header: "Image", value_path: "job.image_status", data_type: "text", default_visible: true, hideable: true },
           { id: "latest-run-status", header: "Last Run", value_path: "latest_run_status", data_type: "text", default_visible: true, hideable: true },
           { id: "latest-run-at", header: "Last Run At", value_path: "latest_run_at", data_type: "datetime", default_visible: true, hideable: true },
-          { id: "enabled", header: "Enabled", value_path: "enabled", data_type: "boolean", default_visible: true, hideable: true },
+          { id: "scheduled", header: "Scheduled Run", value_path: "scheduled", data_type: "boolean", default_visible: true, hideable: true },
         ],
       },
       bulk_actions: [],
@@ -1417,10 +1433,12 @@ createServer(async (request, response) => {
   }
   if (request.method === "GET" && url.pathname === "/v1/signal-jobs") {
     const search = (url.searchParams.get("search") ?? "").toLowerCase();
+    const scheduled = url.searchParams.get("scheduled");
     const matched = signalJobs.filter((configuration) => (
-      !search
-      || configuration.name.toLowerCase().includes(search)
-      || configuration.description?.toLowerCase().includes(search)
+      (!search
+        || configuration.name.toLowerCase().includes(search)
+        || configuration.description?.toLowerCase().includes(search))
+      && (scheduled === null || String(configuration.scheduled) === scheduled)
     ));
     return sendJson(response, 200, {
       items: matched,
@@ -1435,21 +1453,25 @@ createServer(async (request, response) => {
   }
   if (request.method === "POST" && url.pathname === "/v1/signal-jobs") {
     const body = await readJson(request);
+    const errors = retiredJobSettingsErrors(body);
+    if (errors.length) return sendJson(response, 422, { detail: errors });
     const now = new Date().toISOString();
     const created = {
-      ...body,
       uid: `signal-${signalJobs.length + 1}`,
+      name: body.name,
+      description: body.description,
       signal_uid: `signal-${body.universe_uid}`,
-      job_uid: `job-signal-${signalJobs.length + 1}`,
-      lifecycle_state: body.enabled ? "ready" : "paused",
-      last_error: null,
-      job_image_status: "ready",
-      job_automatic_deployment: true,
+      universe_uid: body.universe_uid,
+      account_uid: body.account_uid,
+      scheduled: body.scheduled ?? true,
+      job_uid: signalJob.uid,
+      job: signalJob,
       latest_run_status: null,
       latest_run_at: null,
       created_at: now,
       updated_at: now,
     };
+    created.lifecycle_state = signalLifecycle(created);
     signalJobs.push(created);
     return sendJson(response, 201, created);
   }
@@ -1458,7 +1480,7 @@ createServer(async (request, response) => {
     const uid = decodeURIComponent(signalActionMatch[1]);
     const action = signalActionMatch[2];
     const index = signalJobs.findIndex((configuration) => configuration.uid === uid);
-    if (index < 0) return sendJson(response, 404, { detail: "Signal Job configuration not found." });
+    if (index < 0) return sendJson(response, 404, { detail: "Signal configuration not found." });
     await readJson(request);
     if (action === "run") {
       const now = new Date().toISOString();
@@ -1472,13 +1494,9 @@ createServer(async (request, response) => {
         poll_after_ms: 1000,
       });
     }
-    const enabled = action === "resume" ? true : action === "pause" ? false : signalJobs[index].enabled;
-    signalJobs[index] = {
-      ...signalJobs[index],
-      enabled,
-      lifecycle_state: enabled ? "ready" : "paused",
-      updated_at: new Date().toISOString(),
-    };
+    const scheduled = action === "resume" ? true : action === "pause" ? false : signalJobs[index].scheduled;
+    signalJobs[index] = { ...signalJobs[index], scheduled, updated_at: new Date().toISOString() };
+    signalJobs[index].lifecycle_state = signalLifecycle(signalJobs[index]);
     return sendJson(response, 200, signalJobs[index]);
   }
   const signalRunsMatch = url.pathname.match(/^\/v1\/signal-jobs\/([^/]+)\/runs$/);
@@ -1487,7 +1505,7 @@ createServer(async (request, response) => {
   if (request.method === "GET" && signalObservationsMatch) {
     const uid = decodeURIComponent(signalObservationsMatch[1]);
     const configuration = signalJobs.find((item) => item.uid === uid);
-    if (!configuration) return sendJson(response, 404, { detail: "Signal Job configuration not found." });
+    if (!configuration) return sendJson(response, 404, { detail: "Signal configuration not found." });
     return sendJson(response, 200, signalObservations[uid] ?? {
       configuration_uid: uid,
       signal_uid: configuration.signal_uid,
@@ -1501,25 +1519,19 @@ createServer(async (request, response) => {
   if (signalConfigurationMatch) {
     const uid = decodeURIComponent(signalConfigurationMatch[1]);
     const index = signalJobs.findIndex((configuration) => configuration.uid === uid);
-    if (index < 0) return sendJson(response, 404, { detail: "Signal Job configuration not found." });
+    if (index < 0) return sendJson(response, 404, { detail: "Signal configuration not found." });
     if (request.method === "GET") return sendJson(response, 200, signalJobs[index]);
     if (request.method === "PATCH") {
       const body = await readJson(request);
-      signalJobs[index] = {
-        ...signalJobs[index],
-        ...body,
-        lifecycle_state: body.enabled === false ? "paused" : "ready",
-        updated_at: new Date().toISOString(),
-      };
+      const errors = retiredJobSettingsErrors(body);
+      if (errors.length) return sendJson(response, 422, { detail: errors });
+      signalJobs[index] = { ...signalJobs[index], ...body, updated_at: new Date().toISOString() };
+      signalJobs[index].lifecycle_state = signalLifecycle(signalJobs[index]);
       return sendJson(response, 200, signalJobs[index]);
     }
     if (request.method === "DELETE") {
       const [deleted] = signalJobs.splice(index, 1);
-      return sendJson(response, 200, {
-        configuration_uid: deleted.uid,
-        job_uid: deleted.job_uid,
-        deleted: true,
-      });
+      return sendJson(response, 200, { configuration_uid: deleted.uid, deleted: true });
     }
   }
   if (request.method === "GET" && url.pathname === "/v1/portfolio-configurations/discovery") {
@@ -1569,6 +1581,8 @@ createServer(async (request, response) => {
   }
   if (request.method === "POST" && url.pathname === "/v1/portfolio-configurations") {
     const body = await readJson(request);
+    const errors = retiredJobSettingsErrors(body);
+    if (errors.length) return sendJson(response, 422, { detail: errors });
     const now = new Date().toISOString();
     const ordinal = portfolioConfigurations.length + 1;
     const signal = signalJobs.find((candidate) => candidate.uid === body.signal_configuration_uid);
@@ -1583,7 +1597,8 @@ createServer(async (request, response) => {
       rebalance_configuration_uid: body.rebalance_configuration_uid,
       rebalance_strategy: rebalance?.strategy ?? "immediate_signal",
       portfolio_uid: null,
-      job_uid: `job-portfolio-${ordinal}`,
+      scheduled: body.scheduled ?? true,
+      job_uid: portfolioJob.uid,
       upsample_frequency_id: body.upsample_frequency_id,
       intraday_bar_interpolation_rule: body.intraday_bar_interpolation_rule,
       valuation_column: body.valuation_column,
@@ -1591,13 +1606,7 @@ createServer(async (request, response) => {
       forward_fill_to_now: body.forward_fill_to_now,
       fail_on_missing_prices: body.fail_on_missing_prices,
       commission_fee: body.commission_fee,
-      job: {
-        uid: `job-portfolio-${ordinal}`,
-        ...body.job,
-        schedule_timezone_explicit: body.job.schedule_timezone !== null,
-        image_status: "ready",
-        automatic_deployment: true,
-      },
+      job: portfolioJob,
       latest_run_status: null,
       latest_run_at: null,
       created_at: now,
@@ -1635,13 +1644,11 @@ createServer(async (request, response) => {
     if (request.method === "GET") return sendJson(response, 200, portfolioConfigurationDetail(portfolioConfigurations[index]));
     if (request.method === "PATCH") {
       const body = await readJson(request);
-      const { job: jobSettings, ...configurationFields } = body;
+      const errors = retiredJobSettingsErrors(body);
+      if (errors.length) return sendJson(response, 422, { detail: errors });
       portfolioConfigurations[index] = {
         ...portfolioConfigurations[index],
-        ...configurationFields,
-        job: jobSettings
-          ? { ...portfolioConfigurations[index].job, ...jobSettings }
-          : portfolioConfigurations[index].job,
+        ...body,
         updated_at: new Date().toISOString(),
       };
       return sendJson(response, 200, portfolioConfigurations[index]);

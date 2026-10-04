@@ -4,7 +4,7 @@ The **Portfolios** navigation group contains three sibling applications:
 
 - **ETF Weight Signals** maintains the observed ETF-weight producers;
 - **Rebalance Configurations** maintains reusable rebalance policies; and
-- **ETF Portfolios** composes those resources into analytical portfolio Jobs.
+- **ETF Portfolios** composes those resources into analytical portfolios.
 
 The ETF Portfolios application opens directly on the portfolio list. Select **Create portfolio**
 to open the form.
@@ -16,28 +16,28 @@ Each configuration composes:
 - one reusable Rebalance Configuration;
 - persistent daily `InterpolatedPrices` using forward-fill interpolation;
 - valuation, missing-price, and commission assumptions; and
-- one dedicated Main Sequence Job.
+- whether the shared portfolio Job's daily scheduled run includes it (**Include in the shared
+  portfolio Job's daily scheduled run**, on by default).
 
 The GUI does not expose an Environment selector. The CodeRepositoryBranch runtime resolves its
-Organization Environment. Manual and scheduled runs pass no business arguments; the launcher
-resolves the durable configuration through `JOB_RUN_UID -> Job.uid -> Portfolio Configuration`.
+Organization Environment. Each run selects its configuration with `--configuration-uid <uid>`.
 
 ## Ownership
 
-The Portfolio Configuration is the source of truth for calculation intent. It does not copy the
-selected Signal's Universe or Account, the Bars Configuration's source table, or the Job's
-schedule, compute, image, and deployment fields.
+The Portfolio Configuration is the source of truth for calculation intent and for its scheduled
+flag. It does not copy the selected Signal's Universe or Account, the Bars Configuration's source
+table, or any Job schedule, compute, image, or deployment field.
 
-The dedicated Job is the source of truth for the execution path, schedule, CPU, memory, maximum
-runtime, spot preference, image, and automatic deployment. A JobRun contains execution history
-only. The create and edit forms present these values together, but submit Job fields under the
-nested `job` object so the backend writes every field to its authoritative owner.
+The connector runs every portfolio on one shared portfolio Job, `Alpaca ETF Portfolio`. Its
+workflow file declares the execution path, the daily schedule (02:00 UTC), CPU, memory, maximum
+runtime, spot preference, and automatic deployment, so the form has no schedule or compute fields;
+the connector rejects a request that still sends them. A JobRun contains execution history only.
 
-A calendar schedule includes a five-field crontab and an IANA timezone. The form defaults new
-choices to the browser timezone and explains that daylight-saving transitions preserve the local
-clock time. Detail reads show the effective Job timezone and mark `UTC` when it came from the
-backend's omission default. Interval schedules have no timezone. None of these Job fields is copied
-into the Portfolio Configuration row.
+The details page shows the shared Job's schedule, timezone, resources, and image read-only, and
+whether the portfolio is included in the scheduled run. **Pause** and **Resume** send
+`PATCH {"scheduled": false}` or `{"scheduled": true}` for the portfolio. Until a push of the
+connector has created the Job on the branch, the details page reports that the Job is not deployed
+yet.
 
 ## Price availability policies
 
@@ -75,13 +75,15 @@ configured commission fee.
 
 ## Running and inspecting
 
-Use **Run now** only after the dedicated Job image is ready. A run requires an existing signal
-observation, source bars for the signal Assets, and the migrated persistent interpolation storage.
-The portfolio Job updates interpolation and calculates the ms-markets portfolio without rerunning
-the signal or raw-bars producers.
+Use **Run now** only after the shared Job image is ready; it works whether or not the portfolio is
+paused. The connector refuses a run while the portfolio's previous run is still pending or running,
+or while its preflight is blocked: a run requires existing, enabled linked configurations and a
+signal with published observations, plus source bars for the signal Assets and the migrated
+persistent interpolation storage. The portfolio run updates interpolation and calculates the
+ms-markets portfolio without rerunning the signal or raw-bars producers.
 
 Select a row to load its business-facing detail on demand. The detail resolves the linked Signal,
-Universe, Alpaca accounts, Bars scope and profile, Rebalance policy, Job execution settings, and
+Universe, Alpaca accounts, Bars scope and profile, Rebalance policy, the shared Job's settings, and
 canonical portfolio calendar without exposing their internal UIDs. It also queries up to the latest
 2,500 canonical daily values and renders portfolio value and drawdown history. No observation query
 is made for portfolios that the user has not opened.
@@ -91,5 +93,5 @@ analytics application. The API uses `empyrical-reloaded` to calculate total and 
 annualized volatility, Sharpe, Sortino, maximum drawdown, Calmar, best/worst daily return, and the
 positive-period ratio. The panel states the 252-period annualization and 0% risk-free-rate
 assumptions, shows the exact statistics window, and marks a bounded result when more history exists.
-Alpha and beta are omitted because no benchmark is configured. Delete removes the durable
-configuration and its dedicated Job while retaining already-published portfolio observations.
+Alpha and beta are omitted because no benchmark is configured. Delete removes only the durable
+configuration; already-published portfolio observations and the shared Job's past runs remain.

@@ -328,8 +328,43 @@ export interface BarConfigurationWriteRequest {
   adjustment: string;
 }
 
-export type SignalScheduleType = "interval" | "crontab";
-export type SignalSchedulePeriod = "seconds" | "minutes" | "hours" | "days";
+export type JobScheduleType = "interval" | "crontab";
+export type JobSchedulePeriod = "seconds" | "minutes" | "hours" | "days";
+
+/**
+ * The Job that runs every configuration of one kind. alpaca-connectors declares it in its API
+ * workflow file (connector ADR 0013), so its schedule and compute are read-only here. The API
+ * reports it as `null` until a push has created it on the branch.
+ */
+export interface ConfigurationJob {
+  uid: string;
+  schedule_type: JobScheduleType | null;
+  schedule_every: number | null;
+  schedule_period: JobSchedulePeriod | null;
+  schedule_expression: string | null;
+  schedule_timezone: string | null;
+  schedule_timezone_explicit: boolean | null;
+  schedule_start_time: string | null;
+  cpu_request: string | null;
+  memory_request: string | null;
+  max_runtime_seconds: number | null;
+  spot: boolean;
+  image_status: string | null;
+  automatic_deployment: boolean;
+}
+
+/** The shared Job's schedule as one read-only line. */
+export function formatSharedJobSchedule(job: ConfigurationJob | null): string {
+  if (!job) return "Job not deployed on this branch yet";
+  if (job.schedule_type === "crontab") {
+    const expression = job.schedule_expression ?? "Invalid crontab";
+    const timezone = job.schedule_timezone ?? "UTC";
+    const source = job.schedule_timezone_explicit === false ? " (backend default)" : "";
+    return `${expression} · ${timezone}${source}`;
+  }
+  if (job.schedule_type === "interval") return `Every ${job.schedule_every} ${job.schedule_period}`;
+  return "No schedule";
+}
 
 export interface SignalJobConfiguration {
   uid: string;
@@ -338,22 +373,11 @@ export interface SignalJobConfiguration {
   signal_uid: string;
   universe_uid: string;
   account_uid: string;
+  /** Whether the shared signal Job's daily scheduled run includes this configuration. */
+  scheduled: boolean;
   job_uid: string | null;
-  enabled: boolean;
-  schedule_type: SignalScheduleType;
-  schedule_every: number | null;
-  schedule_period: SignalSchedulePeriod | null;
-  schedule_expression: string | null;
-  schedule_timezone: string | null;
-  schedule_start_time: string | null;
-  cpu_request: string;
-  memory_request: string;
-  max_runtime_seconds: number;
-  spot: boolean;
-  lifecycle_state: "provisioning" | "ready" | "paused" | "error" | "deleting";
-  last_error: string | null;
-  job_image_status: string | null;
-  job_automatic_deployment: boolean | null;
+  job: ConfigurationJob | null;
+  lifecycle_state: "provisioning" | "ready" | "paused";
   latest_run_status: string | null;
   latest_run_at: string | null;
   created_at: string;
@@ -365,17 +389,7 @@ export interface SignalJobConfigurationWriteRequest {
   description: string | null;
   universe_uid: string;
   account_uid: string;
-  enabled: boolean;
-  schedule_type: SignalScheduleType;
-  schedule_every: number | null;
-  schedule_period: SignalSchedulePeriod | null;
-  schedule_expression: string | null;
-  schedule_timezone: string | null;
-  schedule_start_time: string | null;
-  cpu_request: string;
-  memory_request: string;
-  max_runtime_seconds: number;
-  spot: boolean;
+  scheduled: boolean;
 }
 
 export interface SignalJobRunAccepted {
@@ -391,12 +405,15 @@ export interface SignalJobRun {
   uid: string;
   job_uid: string;
   job_name: string;
+  /** The configuration the run's `--configuration-uid` argument selects; null for the scheduled run. */
+  configuration_uid: string | null;
   status: string;
   execution_start: string | null;
   execution_end: string | null;
   commit_hash: string | null;
   runtime_image_uid: string | null;
   runtime_image_digest: string | null;
+  command_args: string[];
   logs_url: string | null;
   failure_message: string | null;
 }
@@ -428,36 +445,6 @@ export interface PortfolioRebalanceConfiguration {
   updated_at: string;
 }
 
-export interface PortfolioJobSettings {
-  schedule_type: SignalScheduleType;
-  schedule_every: number | null;
-  schedule_period: SignalSchedulePeriod | null;
-  schedule_expression: string | null;
-  schedule_timezone: string | null;
-  schedule_start_time: string | null;
-  cpu_request: string;
-  memory_request: string;
-  max_runtime_seconds: number;
-  spot: boolean;
-}
-
-export interface PortfolioJob {
-  uid: string;
-  schedule_type: SignalScheduleType | null;
-  schedule_every: number | null;
-  schedule_period: SignalSchedulePeriod | null;
-  schedule_expression: string | null;
-  schedule_timezone: string | null;
-  schedule_timezone_explicit: boolean | null;
-  schedule_start_time: string | null;
-  cpu_request: string | null;
-  memory_request: string | null;
-  max_runtime_seconds: number | null;
-  spot: boolean;
-  image_status: string | null;
-  automatic_deployment: boolean;
-}
-
 export interface PortfolioConfiguration {
   uid: string;
   name: string;
@@ -468,6 +455,8 @@ export interface PortfolioConfiguration {
   rebalance_configuration_uid: string;
   rebalance_strategy: PortfolioRebalanceStrategy;
   portfolio_uid: string | null;
+  /** Whether the shared portfolio Job's daily scheduled run includes this configuration. */
+  scheduled: boolean;
   job_uid: string | null;
   upsample_frequency_id: "1d";
   intraday_bar_interpolation_rule: "ffill";
@@ -476,7 +465,7 @@ export interface PortfolioConfiguration {
   forward_fill_to_now: boolean;
   fail_on_missing_prices: boolean;
   commission_fee: number;
-  job: PortfolioJob | null;
+  job: ConfigurationJob | null;
   latest_run_status: string | null;
   latest_run_at: string | null;
   created_at: string;
@@ -486,7 +475,7 @@ export interface PortfolioConfiguration {
 export interface PortfolioLinkedSignal {
   name: string;
   description: string | null;
-  enabled: boolean;
+  scheduled: boolean;
   universe_name: string;
   universe_symbol: string;
   account_name: string;
@@ -583,7 +572,7 @@ export interface PortfolioConfigurationWriteRequest {
   forward_fill_to_now: boolean;
   fail_on_missing_prices: boolean;
   commission_fee: number;
-  job: PortfolioJobSettings;
+  scheduled: boolean;
 }
 
 export type PortfolioJobRunAccepted = SignalJobRunAccepted;

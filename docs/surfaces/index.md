@@ -11,7 +11,7 @@ is grouped into three sibling applications under **Portfolios**:
 - **Accounts** registers and maintains Alpaca accounts from their API keys, which the API stores as Main Sequence Secrets.
 - **Universes** creates explicit Asset Universe registrations and Runs their linked sources.
 - **Bars** creates and maintains reusable Alpaca stock-bar configurations.
-- **ETF Weight Signals** creates and operates one dedicated scheduled Job per Universe-backed ETF signal.
+- **ETF Weight Signals** creates and operates Universe-backed ETF signals, which the connector's shared signal Job runs daily.
 - **Rebalance Configurations** creates and maintains reusable portfolio rebalance policies.
 - **ETF Portfolios** composes an existing signal, bars configuration, persistent interpolated
   prices, and an ImmediateSignal rebalance policy into a scheduled analytical portfolio.

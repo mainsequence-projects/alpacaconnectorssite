@@ -36,6 +36,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   API_ENDPOINTS,
   createApiClient,
+  formatSharedJobSchedule,
   type ApiTransport,
   type BarConfiguration,
   type PortfolioConfiguration,
@@ -47,21 +48,8 @@ import {
   type PortfolioRebalanceStrategy,
   type ResourceCollection,
   type SignalJobConfiguration,
-  type SignalSchedulePeriod,
-  type SignalScheduleType,
 } from "./api";
 import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
-import {
-  buildCronExpression,
-  browserScheduleTimezone,
-  CRON_WEEKDAYS,
-  DEFAULT_CRON_SCHEDULE,
-  describeCronSchedule,
-  isValidCronExpression,
-  parseCronExpression,
-  supportedScheduleTimezones,
-  type CronScheduleMode,
-} from "./signalSchedule";
 
 type MutationState =
   | { state: "idle" }
@@ -184,18 +172,6 @@ function createResourceHttpClient(transport: ApiTransport): ResourceHttpClient {
       });
     },
   };
-}
-
-function formatSchedule(configuration: PortfolioConfiguration): string {
-  const job = configuration.job;
-  if (!job) return "Not provisioned";
-  if (job.schedule_type === "crontab") {
-    const expression = job.schedule_expression ?? "Invalid crontab";
-    const timezone = job.schedule_timezone ?? "UTC";
-    const source = job.schedule_timezone_explicit === false ? " (backend default)" : "";
-    return `${expression} · ${timezone}${source}`;
-  }
-  return `Every ${job.schedule_every} ${job.schedule_period}`;
 }
 
 function buildPortfolioResource(transport: ApiTransport) {
@@ -483,16 +459,21 @@ function PortfolioDetail({
   configuration,
   transport,
   onBack,
+  onChanged,
 }: {
   configuration: PortfolioConfiguration;
   transport: ApiTransport;
   onBack: () => void;
+  onChanged: () => void;
 }) {
   const api = useMemo(() => createApiClient(transport), [transport]);
   const [detail, setDetail] = useState<PortfolioConfigurationDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryRevision, setRetryRevision] = useState(0);
+  const [schedulePending, setSchedulePending] = useState(false);
+  const [scheduleNotice, setScheduleNotice] = useState<string | null>(null);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -517,6 +498,29 @@ function PortfolioDetail({
 
   const resolved = detail ?? configuration;
   const canonicalPortfolio = detail?.canonical_portfolio;
+
+  async function toggleScheduled() {
+    const scheduled = !resolved.scheduled;
+    setSchedulePending(true);
+    setScheduleNotice(null);
+    setScheduleError(null);
+    try {
+      await api.patch<PortfolioConfiguration>(
+        `${API_ENDPOINTS.portfolioConfigurations}/${encodeURIComponent(configuration.uid)}`,
+        { scheduled },
+      );
+      setScheduleNotice(scheduled
+        ? "Portfolio included in the scheduled run."
+        : "Portfolio left out of the scheduled run.");
+      setRetryRevision((value) => value + 1);
+      onChanged();
+    } catch (requestError) {
+      setScheduleError(formatError(requestError));
+    } finally {
+      setSchedulePending(false);
+    }
+  }
+
   const latestRun = resolved.latest_run_at
     ? `${resolved.latest_run_status ?? "Unknown"} · ${formatDateTime(resolved.latest_run_at)}`
     : "Never";
@@ -542,9 +546,14 @@ function PortfolioDetail({
         />
       ) : undefined}
       headerActions={(
-        <button className="button button--secondary" type="button" onClick={onBack}>
-          Back to portfolios
-        </button>
+        <>
+          <button className="button button--secondary" type="button" onClick={() => void toggleScheduled()} disabled={schedulePending || loading}>
+            {resolved.scheduled ? "Pause" : "Resume"}
+          </button>
+          <button className="button button--secondary" type="button" onClick={onBack}>
+            Back to portfolios
+          </button>
+        </>
       )}
       summary={(
         <EntitySummary
@@ -565,7 +574,8 @@ function PortfolioDetail({
             inline_fields: [
               { key: "signal", label: "Signal", value: detail?.linked_signal.name ?? "Loading" },
               { key: "bars", label: "Valuation source", value: detail?.linked_bars.name ?? "Loading" },
-              { key: "schedule", label: "Schedule", value: formatSchedule(resolved) },
+              { key: "scheduled", label: "Scheduled run", value: resolved.scheduled ? "Included" : "Paused" },
+              { key: "schedule", label: "Shared Job schedule", value: formatSharedJobSchedule(resolved.job) },
               { key: "latest-run", label: "Latest run", value: latestRun },
             ],
             highlight_fields: [],
@@ -599,6 +609,8 @@ function PortfolioDetail({
         />
       )}
     >
+      {scheduleNotice ? <p className="muted" role="status">{scheduleNotice}</p> : null}
+      {scheduleError ? <p className="form-error" role="alert">{scheduleError}</p> : null}
       {detail ? (
         <div className="portfolio-detail-stack">
           <ApplicationCard
@@ -715,18 +727,19 @@ function PortfolioDetail({
               <summary className="portfolio-detail-panel__summary">
                 <span>
                   <h2>Execution and calendar</h2>
-                  <p>Job schedule, deployment, and run observability</p>
+                  <p>Shared portfolio Job, deployment, and run observability</p>
                 </span>
-                <span className="portfolio-detail-panel__hint">Schedule + resources</span>
+                <span className="portfolio-detail-panel__hint">Shared Job</span>
               </summary>
               <div className="portfolio-detail-panel__content">
                 <section className="portfolio-detail-subpanel">
-                  <h3>Job settings</h3>
+                  <h3>Shared portfolio Job</h3>
                   <dl className="portfolio-detail-tree">
-                    <div><dt>Schedule</dt><dd>{formatSchedule(detail)}</dd></div>
+                    <div><dt>Scheduled run</dt><dd>{detail.scheduled ? "Included" : "Paused"}</dd></div>
+                    <div><dt>Schedule</dt><dd>{formatSharedJobSchedule(detail.job)}</dd></div>
                     <div><dt>Latest run</dt><dd>{latestRun}</dd></div>
-                    <div><dt>Job resources</dt><dd>{detail.job ? `${detail.job.cpu_request ?? "Default"} CPU · ${detail.job.memory_request ?? "Default"} GiB · ${detail.job.max_runtime_seconds ?? "Default"} seconds${detail.job.spot ? " · spot" : ""}` : "Job not provisioned"}</dd></div>
-                    <div><dt>Deployment</dt><dd>{detail.job ? `${detail.job.image_status ?? "Unknown image status"} · ${detail.job.automatic_deployment ? "automatic" : "manual"}` : "Job not provisioned"}</dd></div>
+                    <div><dt>Job resources</dt><dd>{detail.job ? `${detail.job.cpu_request ?? "Default"} CPU · ${detail.job.memory_request ?? "Default"} GiB · ${detail.job.max_runtime_seconds ?? "Default"} seconds${detail.job.spot ? " · spot" : ""}` : "Job not deployed on this branch yet"}</dd></div>
+                    <div><dt>Deployment</dt><dd>{detail.job ? `${detail.job.image_status ?? "Unknown image status"} · ${detail.job.automatic_deployment ? "automatic" : "manual"}` : "Job not deployed on this branch yet"}</dd></div>
                     <div><dt>Latest portfolio observation</dt><dd>{formatDateTime(detail.canonical_portfolio.latest_observation_at)}</dd></div>
                   </dl>
                 </section>
@@ -784,19 +797,7 @@ export function PortfoliosPage({
   const [forwardFillToNow, setForwardFillToNow] = useState(false);
   const [failOnMissingPrices, setFailOnMissingPrices] = useState(true);
   const [commissionPercentage, setCommissionPercentage] = useState(DEFAULT_COMMISSION_PERCENTAGE);
-  const [scheduleType, setScheduleType] = useState<SignalScheduleType>("interval");
-  const [scheduleEvery, setScheduleEvery] = useState(1);
-  const [schedulePeriod, setSchedulePeriod] = useState<SignalSchedulePeriod>("days");
-  const [cronMode, setCronMode] = useState<CronScheduleMode>(DEFAULT_CRON_SCHEDULE.mode);
-  const [cronTime, setCronTime] = useState(DEFAULT_CRON_SCHEDULE.time);
-  const [cronWeekday, setCronWeekday] = useState(DEFAULT_CRON_SCHEDULE.weekday);
-  const [cronMonthDay, setCronMonthDay] = useState(DEFAULT_CRON_SCHEDULE.monthDay);
-  const [advancedCronExpression, setAdvancedCronExpression] = useState(DEFAULT_CRON_SCHEDULE.advancedExpression);
-  const [scheduleTimezone, setScheduleTimezone] = useState(browserScheduleTimezone);
-  const [cpuRequest, setCpuRequest] = useState("0.25");
-  const [memoryRequest, setMemoryRequest] = useState("0.5");
-  const [maxRuntimeSeconds, setMaxRuntimeSeconds] = useState(3600);
-  const [spot, setSpot] = useState(false);
+  const [scheduled, setScheduled] = useState(true);
   const [mutation, setMutation] = useState<MutationState>({ state: "idle" });
   const [portfolioRefreshKey, setPortfolioRefreshKey] = useState(0);
   const [rebalanceRefreshKey, setRebalanceRefreshKey] = useState(0);
@@ -817,7 +818,7 @@ export function PortfoliosPage({
     setDependenciesLoading(true);
     setDependenciesError(null);
     Promise.all([
-      api.get<ResourceCollection<SignalJobConfiguration>>(`${API_ENDPOINTS.signalJobs}?limit=100&offset=0&enabled=true&ordering=name`, controller.signal),
+      api.get<ResourceCollection<SignalJobConfiguration>>(`${API_ENDPOINTS.signalJobs}?limit=100&offset=0&scheduled=true&ordering=name`, controller.signal),
       api.get<ResourceCollection<BarConfiguration>>(`${API_ENDPOINTS.barConfigurations}?limit=100&offset=0&enabled=true&ordering=name`, controller.signal),
       api.get<ResourceCollection<PortfolioRebalanceConfiguration>>(`${API_ENDPOINTS.portfolioRebalanceConfigurations}?limit=100&offset=0&ordering=name`, controller.signal),
     ])
@@ -853,18 +854,6 @@ export function PortfoliosPage({
     label: configuration.name,
     subtitle: "ImmediateSignal",
   })), [rebalances]);
-  const cronEditorValue = useMemo(() => ({
-    mode: cronMode,
-    time: cronTime,
-    weekday: cronWeekday,
-    monthDay: cronMonthDay,
-    advancedExpression: advancedCronExpression,
-  }), [advancedCronExpression, cronMode, cronMonthDay, cronTime, cronWeekday]);
-  const scheduleExpression = useMemo(() => buildCronExpression(cronEditorValue), [cronEditorValue]);
-  const timezoneOptions = useMemo(() => supportedScheduleTimezones(scheduleTimezone), [scheduleTimezone]);
-  const scheduleValid = scheduleType === "interval"
-    ? scheduleEvery > 0
-    : isValidCronExpression(scheduleExpression) && Boolean(scheduleTimezone);
   const parsedCommissionPercentage = Number(commissionPercentage);
   const commissionValid = commissionPercentage.trim() !== ""
     && Number.isFinite(parsedCommissionPercentage)
@@ -877,10 +866,6 @@ export function PortfoliosPage({
     && rebalanceConfigurationUid
     && valuationColumn.trim()
     && commissionValid
-    && scheduleValid
-    && cpuRequest.trim()
-    && memoryRequest.trim()
-    && maxRuntimeSeconds > 0
     && !busy
     && !dependenciesLoading
     && !dependenciesError,
@@ -897,19 +882,7 @@ export function PortfoliosPage({
     setForwardFillToNow(false);
     setFailOnMissingPrices(true);
     setCommissionPercentage(DEFAULT_COMMISSION_PERCENTAGE);
-    setScheduleType("interval");
-    setScheduleEvery(1);
-    setSchedulePeriod("days");
-    setCronMode(DEFAULT_CRON_SCHEDULE.mode);
-    setCronTime(DEFAULT_CRON_SCHEDULE.time);
-    setCronWeekday(DEFAULT_CRON_SCHEDULE.weekday);
-    setCronMonthDay(DEFAULT_CRON_SCHEDULE.monthDay);
-    setAdvancedCronExpression(DEFAULT_CRON_SCHEDULE.advancedExpression);
-    setScheduleTimezone(browserScheduleTimezone());
-    setCpuRequest("0.25");
-    setMemoryRequest("0.5");
-    setMaxRuntimeSeconds(3600);
-    setSpot(false);
+    setScheduled(true);
   }
 
   function openCreatePortfolio() {
@@ -930,21 +903,7 @@ export function PortfoliosPage({
     setForwardFillToNow(item.forward_fill_to_now);
     setFailOnMissingPrices(item.fail_on_missing_prices);
     setCommissionPercentage(formatCommissionPercentage(item.commission_fee));
-    const job = item.job;
-    setScheduleType(job?.schedule_type ?? "interval");
-    setScheduleEvery(job?.schedule_every ?? 1);
-    setSchedulePeriod(job?.schedule_period ?? "days");
-    const cron = parseCronExpression(job?.schedule_expression ?? DEFAULT_CRON_SCHEDULE.advancedExpression);
-    setCronMode(cron.mode);
-    setCronTime(cron.time);
-    setCronWeekday(cron.weekday);
-    setCronMonthDay(cron.monthDay);
-    setAdvancedCronExpression(cron.advancedExpression);
-    setScheduleTimezone(job?.schedule_timezone ?? "UTC");
-    setCpuRequest(job?.cpu_request ?? "0.25");
-    setMemoryRequest(job?.memory_request ?? "0.5");
-    setMaxRuntimeSeconds(job?.max_runtime_seconds ?? 3600);
-    setSpot(job?.spot ?? false);
+    setScheduled(item.scheduled);
     setPortfolioFormOpen(true);
     setMutation({ state: "idle" });
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -953,7 +912,7 @@ export function PortfoliosPage({
   async function submitPortfolio(event: FormEvent) {
     event.preventDefault();
     if (!canSubmit) {
-      setMutation({ state: "error", message: "Complete the signal, bars, rebalance, calculation, schedule, and Job resource fields." });
+      setMutation({ state: "error", message: "Complete the signal, bars, rebalance, and calculation fields." });
       return;
     }
     const request: PortfolioConfigurationWriteRequest = {
@@ -969,18 +928,7 @@ export function PortfoliosPage({
       forward_fill_to_now: forwardFillToNow,
       fail_on_missing_prices: failOnMissingPrices,
       commission_fee: parsedCommissionPercentage / 100,
-      job: {
-        schedule_type: scheduleType,
-        schedule_every: scheduleType === "interval" ? scheduleEvery : null,
-        schedule_period: scheduleType === "interval" ? schedulePeriod : null,
-        schedule_expression: scheduleType === "crontab" ? scheduleExpression : null,
-        schedule_timezone: scheduleType === "crontab" ? scheduleTimezone : null,
-        schedule_start_time: null,
-        cpu_request: cpuRequest.trim(),
-        memory_request: memoryRequest.trim(),
-        max_runtime_seconds: maxRuntimeSeconds,
-        spot,
-      },
+      scheduled,
     };
     setMutation({ state: "loading", label: editingPortfolio ? "Updating portfolio" : "Creating portfolio" });
     try {
@@ -1103,7 +1051,7 @@ export function PortfoliosPage({
           title={manageRebalances ? "Rebalance Configurations" : "ETF Portfolios"}
           description={manageRebalances
             ? "Maintain reusable analytical rebalance policies. Phase 1 exposes only ImmediateSignal."
-            : "Compose an existing ETF weight Signal, an Alpaca Bars Configuration, persistent interpolated prices, and an ImmediateSignal rebalance policy. Each Portfolio Configuration owns one dedicated Main Sequence Job."}
+            : "Compose an existing ETF weight Signal, an Alpaca Bars Configuration, persistent interpolated prices, and an ImmediateSignal rebalance policy. The shared portfolio Job declared in the connector's workflow runs every Portfolio Configuration."}
         />
 
         {portfolioFormOpen && !manageRebalances ? (
@@ -1119,7 +1067,7 @@ export function PortfoliosPage({
                   <label className="field field--wide">Description <span>Optional</span><textarea rows={2} value={description} onChange={(event) => setDescription(event.target.value)} disabled={busy} /></label>
                   <div className="field resource-picker-field">
                     <label id="portfolio-signal-label">ETF weight Signal</label>
-                    <ResourcePicker ariaLabelledBy="portfolio-signal-label" disabled={busy || dependenciesLoading} emptyMessage="No enabled ETF weight Signals." fullWidth loading={dependenciesLoading} mode="single" onValueChange={setSignalConfigurationUid} options={signalOptions} placeholder="Select an ETF weight Signal" searchable searchPlaceholder="Search Signals" value={signalConfigurationUid || null} />
+                    <ResourcePicker ariaLabelledBy="portfolio-signal-label" disabled={busy || dependenciesLoading} emptyMessage="No scheduled ETF weight Signals." fullWidth loading={dependenciesLoading} mode="single" onValueChange={setSignalConfigurationUid} options={signalOptions} placeholder="Select an ETF weight Signal" searchable searchPlaceholder="Search Signals" value={signalConfigurationUid || null} />
                   </div>
                   <div className="field resource-picker-field">
                     <label id="portfolio-bars-label">Alpaca Bars Configuration</label>
@@ -1184,40 +1132,9 @@ export function PortfoliosPage({
                 </fieldset>
               </section>
 
-              <section className="workflow-form-section">
-                <div className="workflow-form-section__header"><h3>Job schedule</h3><p>The schedule is written only to the dedicated Main Sequence Job.</p></div>
-                <div className="form-grid">
-                  <label className="field">Scheduling method<select value={scheduleType} onChange={(event) => setScheduleType(event.target.value as SignalScheduleType)} disabled={busy}><option value="interval">Interval</option><option value="crontab">Calendar schedule</option></select></label>
-                  {scheduleType === "interval" ? (
-                    <>
-                      <label className="field">Run every<input type="number" min={1} value={scheduleEvery} onChange={(event) => setScheduleEvery(Number(event.target.value))} disabled={busy} /></label>
-                      <label className="field">Interval period<select value={schedulePeriod} onChange={(event) => setSchedulePeriod(event.target.value as SignalSchedulePeriod)} disabled={busy}><option value="minutes">Minutes</option><option value="hours">Hours</option><option value="days">Days</option></select></label>
-                    </>
-                  ) : (
-                    <>
-                      <label className="field">Calendar pattern<select value={cronMode} onChange={(event) => setCronMode(event.target.value as CronScheduleMode)} disabled={busy}><option value="daily">Every day</option><option value="weekdays">Monday through Friday</option><option value="weekly">Once a week</option><option value="monthly">Once a month</option><option value="advanced">Advanced crontab</option></select></label>
-                      {cronMode === "advanced" ? (
-                        <label className="field">Five-field crontab<input aria-describedby="portfolio-cron-help" value={advancedCronExpression} onChange={(event) => setAdvancedCronExpression(event.target.value)} placeholder="0 9 * * 1-5" spellCheck={false} disabled={busy} /></label>
-                      ) : (
-                        <label className="field">Schedule time<input type="time" value={cronTime} onChange={(event) => setCronTime(event.target.value)} disabled={busy} /></label>
-                      )}
-                      {cronMode === "weekly" ? <label className="field">Day of week<select value={cronWeekday} onChange={(event) => setCronWeekday(event.target.value)} disabled={busy}>{CRON_WEEKDAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}</select></label> : null}
-                      {cronMode === "monthly" ? <label className="field">Day of month<input type="number" min={1} max={31} value={cronMonthDay} onChange={(event) => setCronMonthDay(Number(event.target.value))} disabled={busy} /></label> : null}
-                      <label className="field">Timezone<select value={scheduleTimezone} onChange={(event) => setScheduleTimezone(event.target.value)} disabled={busy}>{timezoneOptions.map((timezone) => <option key={timezone} value={timezone}>{timezone}</option>)}</select></label>
-                      <div className="schedule-preview field--wide" aria-live="polite"><div><span>Generated schedule</span><strong>{describeCronSchedule(cronEditorValue, scheduleTimezone)}</strong></div><code>{scheduleExpression || "Invalid schedule"}</code><small id="portfolio-cron-help">Main Sequence evaluates the five-field crontab in the selected IANA timezone. Daylight-saving changes follow that timezone; the Job keeps the same local clock time.</small></div>
-                    </>
-                  )}
-                </div>
-              </section>
-
-              <section className="workflow-form-section">
-                <div className="workflow-form-section__header"><h3>Job resources</h3><p>These values are written only to the Job and are never duplicated in the Portfolio Configuration.</p></div>
-                <div className="form-grid">
-                  <label className="field">CPU request<input value={cpuRequest} onChange={(event) => setCpuRequest(event.target.value)} disabled={busy} /></label>
-                  <label className="field">Memory request (GiB)<input value={memoryRequest} onChange={(event) => setMemoryRequest(event.target.value)} disabled={busy} /></label>
-                  <label className="field">Maximum runtime (seconds)<input type="number" min={1} value={maxRuntimeSeconds} onChange={(event) => setMaxRuntimeSeconds(Number(event.target.value))} disabled={busy} /></label>
-                </div>
-                <label className="checkbox-field"><input type="checkbox" checked={spot} onChange={(event) => setSpot(event.target.checked)} disabled={busy} />Prefer spot capacity</label>
+              <section className="workflow-form-section" aria-labelledby="portfolio-scheduled-run-heading">
+                <div className="workflow-form-section__header"><h3 id="portfolio-scheduled-run-heading">Scheduled run</h3><p>The shared portfolio Job declared in the connector&apos;s workflow runs every scheduled portfolio once a day; its schedule and resources are shown on the portfolio&apos;s details page. A portfolio left out can still be run manually.</p></div>
+                <label className="checkbox-field"><input type="checkbox" checked={scheduled} onChange={(event) => setScheduled(event.target.checked)} disabled={busy} />Include in the shared portfolio Job&apos;s daily scheduled run</label>
               </section>
               {dependenciesError ? <p className="form-error" role="alert">{dependenciesError}</p> : null}
               <aside className="workflow-guidance" aria-label="Portfolio calculation notes"><Info aria-hidden="true" size={18} /><p>Phase 1 uses a persistent daily <strong>InterpolatedPrices</strong> dependency with forward-fill interpolation for source-bar gaps, then applies observed weights through <strong>ImmediateSignal</strong>. Signal timestamps record observation time and do not guarantee exact economic effective time.</p></aside>
@@ -1277,7 +1194,7 @@ export function PortfoliosPage({
         {manageRebalances ? (
           <ResourceListPage definition={rebalanceDefinition} embedded pageSize={25} primaryActions={rebalancePrimaryActions} refreshable refreshKey={rebalanceRefreshKey} rowActions={rebalanceRowActions} searchPlaceholder="Search Rebalance Configurations" />
         ) : selectedPortfolio ? (
-          <PortfolioDetail configuration={selectedPortfolio} transport={transport} onBack={() => setSelectedPortfolio(null)} />
+          <PortfolioDetail configuration={selectedPortfolio} transport={transport} onBack={() => setSelectedPortfolio(null)} onChanged={() => setPortfolioRefreshKey((current) => current + 1)} />
         ) : (
           <ResourceListPage definition={portfolioDefinition} embedded pageSize={25} primaryActions={portfolioPrimaryActions} onRowActivate={setSelectedPortfolio} refreshable refreshKey={portfolioRefreshKey} rowActions={portfolioRowActions} searchPlaceholder="Search ETF Portfolios" />
         )}
@@ -1286,9 +1203,9 @@ export function PortfoliosPage({
       <ResourceActionConfirmationDialog
         open={deletePortfolioTarget !== null || deleteRebalanceTarget !== null}
         actionLabel="Delete"
-        title={deletePortfolioTarget ? "Delete portfolio configuration and Job" : "Delete rebalance configuration"}
+        title={deletePortfolioTarget ? "Delete portfolio configuration" : "Delete rebalance configuration"}
         selectionLabel={deletePortfolioTarget?.name ?? deleteRebalanceTarget?.name ?? "configuration"}
-        description={deletePortfolioTarget ? "Delete this dedicated Main Sequence Job and its durable Portfolio Configuration." : "Delete this reusable Rebalance Configuration."}
+        description={deletePortfolioTarget ? "Delete this durable Portfolio Configuration. The shared portfolio Job and its past runs remain." : "Delete this reusable Rebalance Configuration."}
         warning={deletePortfolioTarget ? "Published portfolio values and weights are retained." : "Deletion is blocked while a Portfolio Configuration still references this row."}
         confirmationWord="DELETE"
         confirmationValue={deleteConfirmation}

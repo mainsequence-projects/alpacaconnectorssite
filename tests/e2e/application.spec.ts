@@ -586,42 +586,54 @@ test("shows bars request failures in a dismissible modal", async ({ page }) => {
   await expect(errorDialog).toHaveCount(0);
 });
 
-test("creates one dedicated Job configuration per ETF signal and manages its lifecycle", async ({ page }) => {
+test("creates ETF signals that only choose whether the shared Job's scheduled run includes them", async ({ page }) => {
+  const writes: { method: string; body: Record<string, unknown> }[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith("/v1/signal-jobs") && ["POST", "PATCH"].includes(request.method()) && !url.pathname.includes("/actions/")) {
+      writes.push({ method: request.method(), body: request.postDataJSON() as Record<string, unknown> });
+    }
+  });
+
   await page.goto("/signals");
   await expect(page.getByRole("heading", { level: 1, name: "ETF Weight Signals" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "ETF Weight Signals" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Create signal" })).toHaveCount(0);
   await expect(page.getByRole("row", { name: /Daily IVV observation/ })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Schedule" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Scheduled Run" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Signal UID" })).toBeVisible();
 
   await page.getByRole("button", { name: "Create signal", exact: true }).click();
   const form = page.locator("form.workflow-form");
   await expect(page.getByRole("heading", { name: "Create signal" })).toBeVisible();
   await expect(form.getByLabel("Environment")).toHaveCount(0);
-  await form.getByLabel("Scheduling method").selectOption("crontab");
-  await form.getByLabel("Timezone").selectOption("UTC");
-  await form.getByLabel("Calendar pattern").selectOption("weekly");
-  await form.getByLabel("Schedule time", { exact: true }).fill("14:35");
-  await form.getByLabel("Day of week").selectOption("3");
-  await expect(form.getByLabel("Timezone")).toHaveValue("UTC");
-  await expect(form.getByText("Every Wednesday at 14:35 (UTC)", { exact: true })).toBeVisible();
-  await expect(form.getByText("35 14 * * 3", { exact: true })).toBeVisible();
-  await form.getByLabel("Calendar pattern").selectOption("advanced");
-  await form.getByLabel("Five-field crontab").fill("*/15 9-16 * * 1-5");
-  await expect(form.getByText("*/15 9-16 * * 1-5", { exact: true })).toBeVisible();
+  await expect(form.getByText("Job schedule", { exact: true })).toHaveCount(0);
+  await expect(form.getByText("Job resources", { exact: true })).toHaveCount(0);
+  await expect(form.getByLabel("Scheduling method")).toHaveCount(0);
+  await expect(form.getByLabel("CPU request")).toHaveCount(0);
+  const scheduled = form.getByLabel("Include in the shared signal Job's daily scheduled run");
+  await expect(scheduled).toBeChecked();
   await form.getByLabel("Signal name").fill("Scheduled IWM observation");
   await form.getByRole("button", { name: "Universe" }).click();
   await page.getByRole("option", { name: /Russell 2000 holdings/ }).click();
   await form.getByRole("button", { name: "Runtime Alpaca account" }).click();
   await page.getByRole("option", { name: /Paper account/ }).click();
-  await form.getByLabel("Scheduling method").selectOption("interval");
   await form.getByRole("button", { name: "Create signal", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Created Scheduled IWM observation." })).toBeVisible();
+  expect(writes[0]).toEqual({
+    method: "POST",
+    body: {
+      name: "Scheduled IWM observation",
+      description: null,
+      universe_uid: "universe-iwm",
+      account_uid: "account-paper",
+      scheduled: true,
+    },
+  });
 
   let createdRow = page.getByRole("row", { name: /Scheduled IWM observation/ });
-  await expect(createdRow).toContainText("Every 1 days");
   await expect(createdRow).toContainText("ready");
+  await expect(createdRow).toContainText("Included");
   await selectRowAction(page, createdRow, "Run now");
   await expect(page.getByRole("heading", { name: /Scheduled IWM observation: run completed/ })).toBeVisible();
 
@@ -629,20 +641,47 @@ test("creates one dedicated Job configuration per ETF signal and manages its lif
   await selectRowAction(page, createdRow, "Edit");
   await expect(page.getByRole("heading", { name: "Edit signal" })).toBeVisible();
   await page.getByLabel("Signal name").fill("Scheduled IWM observation updated");
-  await page.getByLabel("Enabled and scheduled").uncheck();
+  await page.getByLabel("Include in the shared signal Job's daily scheduled run").uncheck();
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByRole("heading", { name: "Updated Scheduled IWM observation updated." })).toBeVisible();
+  expect(writes[1].method).toBe("PATCH");
+  expect(writes[1].body).toMatchObject({ name: "Scheduled IWM observation updated", scheduled: false });
+  for (const retired of ["job", "enabled", "schedule_type", "cpu_request", "spot"]) {
+    expect(writes[1].body).not.toHaveProperty(retired);
+  }
 
   createdRow = page.getByRole("row", { name: /Scheduled IWM observation updated/ });
   await expect(createdRow).toContainText("Paused");
-  await expect(createdRow.getByRole("button", { name: "Pause" })).toHaveCount(0);
-  await expect(createdRow.getByRole("button", { name: "Resume" })).toHaveCount(0);
   await expect(createdRow.getByRole("button", { name: "Reconcile" })).toHaveCount(0);
   await selectRowAction(page, createdRow, "Delete");
-  const dialog = page.getByRole("dialog", { name: "Delete signal Job" });
+  const dialog = page.getByRole("dialog", { name: "Delete signal" });
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(createdRow).toHaveCount(0);
+});
+
+test("shows the shared signal Job schedule read-only and pauses through the signal actions", async ({ page }) => {
+  const actions: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname.startsWith("/v1/signal-jobs/signal-existing/actions/")) {
+      actions.push(url.pathname.split("/").at(-1) ?? "");
+    }
+  });
+
+  await page.goto("/signals");
+  await page.getByRole("row", { name: /Daily IVV observation/ }).click();
+  await expect(page.getByRole("heading", { name: "Daily IVV observation" })).toBeVisible();
+  await expect(page.getByText("30 0 * * * · UTC", { exact: true })).toBeVisible();
+  await expect(page.getByText("Included", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
+  await expect(page.getByText("Paused", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Resume", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+  await expect(page.getByText("Included", { exact: true })).toBeVisible();
+  expect(actions).toEqual(["pause", "resume"]);
 });
 
 test("loads and transposes the latest signal observations only after signal selection", async ({ page }) => {
@@ -720,6 +759,29 @@ test("loads resolved portfolio details and value history only after portfolio se
   expect(requestUrl.searchParams.get("observation_limit")).toBe("2500");
 });
 
+test("shows the shared portfolio Job schedule read-only and pauses through PATCH scheduled", async ({ page }) => {
+  const patches: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "PATCH" && url.pathname === "/v1/portfolio-configurations/portfolio-config-existing") {
+      patches.push(request.postDataJSON() as Record<string, unknown>);
+    }
+  });
+
+  await page.goto("/portfolios");
+  await page.getByRole("row", { name: /Daily IVV analytical portfolio/ }).click();
+  await expect(page.getByRole("heading", { name: "Daily IVV analytical portfolio" })).toBeVisible();
+  await expect(page.getByText("0 2 * * * · UTC", { exact: true }).first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(page.getByText("Portfolio left out of the scheduled run.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Resume", exact: true }).click();
+  await expect(page.getByText("Portfolio included in the scheduled run.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+  expect(patches).toEqual([{ scheduled: false }, { scheduled: true }]);
+});
+
 test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration", async ({ page }) => {
   let createPayload: Record<string, unknown> | null = null;
   page.on("request", (request) => {
@@ -750,7 +812,10 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
   const commissionInput = form.getByLabel("Commission fee (%)");
   await expect(commissionInput).toHaveValue("0.018");
   await expect(form.getByText("0.018% is stored and submitted as 0.00018", { exact: false })).toBeVisible();
-  await expect(form.locator(".workflow-form-section").last()).toContainText("Job resources");
+  await expect(form.locator(".workflow-form-section").last()).toContainText("Scheduled run");
+  await expect(form.getByText("Job schedule", { exact: true })).toHaveCount(0);
+  await expect(form.getByLabel("CPU request")).toHaveCount(0);
+  await expect(form.getByLabel("Include in the shared portfolio Job's daily scheduled run")).toBeChecked();
   await expect(form.locator(".workflow-form-section + .workflow-guidance")).toBeVisible();
   await form.getByLabel("Portfolio name").fill("Daily observed IVV portfolio");
   await form.getByRole("button", { name: "ETF weight Signal" }).click();
@@ -760,18 +825,13 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
   await form.getByRole("button", { name: "Rebalance Configuration" }).click();
   await page.getByRole("option", { name: /Immediate observed weights/ }).click();
   await commissionInput.fill("0.025");
-  await form.getByLabel("Scheduling method").selectOption("crontab");
-  await form.getByLabel("Timezone").selectOption("UTC");
-  await form.getByLabel("Calendar pattern").selectOption("weekdays");
-  await form.getByLabel("Schedule time", { exact: true }).fill("09:15");
-  await expect(form.getByLabel("Timezone")).toHaveValue("UTC");
-  await expect(form.getByText("15 9 * * 1-5", { exact: true })).toBeVisible();
   await form.getByRole("button", { name: "Create portfolio", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Created Daily observed IVV portfolio." })).toBeVisible();
 
   expect(createPayload).not.toBeNull();
   expect(createPayload).not.toHaveProperty("environment");
   expect(createPayload).not.toHaveProperty("schedule_type");
+  expect(createPayload).not.toHaveProperty("job");
   expect(createPayload).toMatchObject({
     signal_configuration_uid: "signal-existing",
     bars_configuration_uid: "bars-existing",
@@ -779,11 +839,7 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
     upsample_frequency_id: "1d",
     intraday_bar_interpolation_rule: "ffill",
     commission_fee: 0.00025,
-    job: {
-      schedule_type: "crontab",
-      schedule_expression: "15 9 * * 1-5",
-      schedule_timezone: "UTC",
-    },
+    scheduled: true,
   });
 
   let createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio/ });
@@ -800,7 +856,7 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
 
   createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio updated/ });
   await selectRowAction(page, createdRow, "Delete");
-  const dialog = page.getByRole("dialog", { name: "Delete portfolio configuration and Job" });
+  const dialog = page.getByRole("dialog", { name: "Delete portfolio configuration" });
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(createdRow).toHaveCount(0);
@@ -904,7 +960,7 @@ test("serves same-artifact documentation routes", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Project capabilities" })).toBeVisible();
   await page.goto("/docs/surfaces/signals/");
   await expect(page.getByRole("heading", { name: "Signals", exact: true })).toBeVisible();
-  await expect(page.getByText("Each saved configuration owns one dedicated Main Sequence Job.", { exact: false })).toBeVisible();
+  await expect(page.getByText("The connector runs every signal on one shared signal Job", { exact: false })).toBeVisible();
   await page.goto("/docs/technical/frontend-implementation-plan/");
   await expect(page.getByRole("heading", { name: "Frontend implementation plan" })).toBeVisible();
 });

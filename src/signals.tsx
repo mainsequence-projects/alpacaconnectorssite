@@ -31,6 +31,7 @@ import type { ReactNode } from "react";
 import {
   API_ENDPOINTS,
   createApiClient,
+  formatSharedJobSchedule,
   signalObservationsPath,
   type AccountSummary,
   type ApiTransport,
@@ -40,21 +41,8 @@ import {
   type SignalJobConfigurationWriteRequest,
   type SignalJobRunAccepted,
   type SignalObservations,
-  type SignalSchedulePeriod,
-  type SignalScheduleType,
 } from "./api";
 import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
-import {
-  buildCronExpression,
-  browserScheduleTimezone,
-  CRON_WEEKDAYS,
-  DEFAULT_CRON_SCHEDULE,
-  describeCronSchedule,
-  isValidCronExpression,
-  parseCronExpression,
-  supportedScheduleTimezones,
-  type CronScheduleMode,
-} from "./signalSchedule";
 
 type MutationState =
   | { state: "idle" }
@@ -91,14 +79,6 @@ function createResourceHttpClient(transport: ApiTransport): ResourceHttpClient {
       });
     },
   };
-}
-
-function formatSchedule(configuration: SignalJobConfiguration): string {
-  if (configuration.schedule_type === "crontab") {
-    const expression = configuration.schedule_expression ?? "Invalid crontab";
-    return `${expression} · ${configuration.schedule_timezone ?? "UTC"}`;
-  }
-  return `Every ${configuration.schedule_every} ${configuration.schedule_period}`;
 }
 
 function formatObservationTime(value: string): string {
@@ -148,16 +128,36 @@ function SignalDetail({
   configuration,
   transport,
   onBack,
+  onConfigurationChange,
 }: {
   configuration: SignalJobConfiguration;
   transport: ApiTransport;
   onBack: () => void;
+  onConfigurationChange: (configuration: SignalJobConfiguration) => void;
 }) {
   const api = useMemo(() => createApiClient(transport), [transport]);
   const [observations, setObservations] = useState<SignalObservations | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryRevision, setRetryRevision] = useState(0);
+  const [schedulePending, setSchedulePending] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
+  async function toggleScheduled() {
+    setSchedulePending(true);
+    setScheduleError(null);
+    try {
+      const action = configuration.scheduled ? "pause" : "resume";
+      onConfigurationChange(await api.post<SignalJobConfiguration>(
+        `${API_ENDPOINTS.signalJobs}/${encodeURIComponent(configuration.uid)}/actions/${action}`,
+        {},
+      ));
+    } catch (requestError) {
+      setScheduleError(formatError(requestError));
+    } finally {
+      setSchedulePending(false);
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -207,9 +207,14 @@ function SignalDetail({
         />
       ) : undefined}
       headerActions={(
-        <button className="button button--secondary" type="button" onClick={onBack}>
-          Back to signals
-        </button>
+        <>
+          <button className="button button--secondary" type="button" onClick={() => void toggleScheduled()} disabled={schedulePending}>
+            {configuration.scheduled ? "Pause" : "Resume"}
+          </button>
+          <button className="button button--secondary" type="button" onClick={onBack}>
+            Back to signals
+          </button>
+        </>
       )}
       summary={(
         <EntitySummary
@@ -227,7 +232,8 @@ function SignalDetail({
             inline_fields: [
               { key: "signal-uid", label: "Signal UID", value: configuration.signal_uid },
               { key: "universe-uid", label: "Universe UID", value: configuration.universe_uid },
-              { key: "schedule", label: "Schedule", value: formatSchedule(configuration) },
+              { key: "scheduled", label: "Scheduled run", value: configuration.scheduled ? "Included" : "Paused" },
+              { key: "schedule", label: "Shared Job schedule", value: formatSharedJobSchedule(configuration.job) },
               {
                 key: "latest-run",
                 label: "Latest run",
@@ -255,9 +261,10 @@ function SignalDetail({
         />
       )}
     >
+      {scheduleError ? <p className="form-error" role="alert">{scheduleError}</p> : null}
       {observations && observations.observation_count === 0 ? (
         <ApplicationCard header={<h2>Latest signal weights</h2>}>
-          <p className="muted">This signal has no published observations yet. Run its Job to publish the first weight frame.</p>
+          <p className="muted">This signal has no published observations yet. Run it to publish the first weight frame.</p>
         </ApplicationCard>
       ) : observations ? (
         <section className="signal-observations" aria-labelledby="signal-observations-heading">
@@ -299,8 +306,7 @@ function buildSignalResource(transport: ApiTransport) {
       limit: pageSize,
       offset: pageIndex * pageSize,
       search,
-      enabled: filters?.enabled,
-      lifecycle_state: filters?.lifecycle_state,
+      scheduled: filters?.scheduled,
       ordering: sort?.[0]
         ? `${sort[0].direction === "descending" ? "-" : ""}${sort[0].key}`
         : "name",
@@ -311,8 +317,8 @@ function buildSignalResource(transport: ApiTransport) {
   return defineResourceApplication({
     id: "alpaca-etf-signal-jobs",
     label: "ETF Weight Signals",
-    itemLabel: "signal Job",
-    description: "Scheduled Universe observations. Each configuration owns one Job and every JobRun resolves that stored configuration.",
+    itemLabel: "signal",
+    description: "Scheduled Universe observations. The shared signal Job runs every configuration; each JobRun selects one with --configuration-uid.",
     getId: (configuration: SignalJobConfiguration) => configuration.uid,
     adapter,
     columns: [
@@ -338,23 +344,17 @@ function buildSignalResource(transport: ApiTransport) {
         id: "lifecycle-state",
         header: "State",
         getValue: (configuration) => configuration.lifecycle_state,
-        sortableKey: "lifecycle_state",
         renderCell: (configuration) => (
           <ResourceStatusCell
             label={configuration.lifecycle_state}
-            tone={configuration.lifecycle_state === "ready" ? "success" : configuration.lifecycle_state === "error" ? "warning" : "neutral"}
+            tone={configuration.lifecycle_state === "ready" ? "success" : "neutral"}
           />
         ),
       },
       {
-        id: "schedule-type",
-        header: "Schedule",
-        getValue: formatSchedule,
-      },
-      {
         id: "job-image-status",
         header: "Image",
-        getValue: (configuration) => configuration.job_image_status ?? "not provisioned",
+        getValue: (configuration) => configuration.job?.image_status ?? "not provisioned",
       },
       {
         id: "latest-run-status",
@@ -370,13 +370,13 @@ function buildSignalResource(transport: ApiTransport) {
           : "Never",
       },
       {
-        id: "enabled",
-        header: "Enabled",
-        getValue: (configuration) => configuration.enabled,
+        id: "scheduled",
+        header: "Scheduled Run",
+        getValue: (configuration) => configuration.scheduled,
         renderCell: (configuration) => (
           <ResourceStatusCell
-            label={configuration.enabled ? "Enabled" : "Paused"}
-            tone={configuration.enabled ? "success" : "neutral"}
+            label={configuration.scheduled ? "Included" : "Paused"}
+            tone={configuration.scheduled ? "success" : "neutral"}
           />
         ),
       },
@@ -401,22 +401,7 @@ export function SignalsPage({
   const [description, setDescription] = useState("");
   const [universeUid, setUniverseUid] = useState("");
   const [accountUid, setAccountUid] = useState("");
-  const [enabled, setEnabled] = useState(true);
-  const [scheduleType, setScheduleType] = useState<SignalScheduleType>("interval");
-  const [scheduleEvery, setScheduleEvery] = useState(1);
-  const [schedulePeriod, setSchedulePeriod] = useState<SignalSchedulePeriod>("days");
-  const [cronMode, setCronMode] = useState<CronScheduleMode>(DEFAULT_CRON_SCHEDULE.mode);
-  const [cronTime, setCronTime] = useState(DEFAULT_CRON_SCHEDULE.time);
-  const [cronWeekday, setCronWeekday] = useState(DEFAULT_CRON_SCHEDULE.weekday);
-  const [cronMonthDay, setCronMonthDay] = useState(DEFAULT_CRON_SCHEDULE.monthDay);
-  const [advancedCronExpression, setAdvancedCronExpression] = useState(
-    DEFAULT_CRON_SCHEDULE.advancedExpression,
-  );
-  const [scheduleTimezone, setScheduleTimezone] = useState(browserScheduleTimezone);
-  const [cpuRequest, setCpuRequest] = useState("0.25");
-  const [memoryRequest, setMemoryRequest] = useState("0.5");
-  const [maxRuntimeSeconds, setMaxRuntimeSeconds] = useState(3600);
-  const [spot, setSpot] = useState(false);
+  const [scheduled, setScheduled] = useState(true);
   const [mutation, setMutation] = useState<MutationState>({ state: "idle" });
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedSignal, setSelectedSignal] = useState<SignalJobConfiguration | null>(null);
@@ -466,32 +451,10 @@ export function SignalsPage({
     subtitle: `${universe.symbol} · ${universe.uid}`,
   })), [universes]);
   const busy = mutation.state === "loading";
-  const cronEditorValue = useMemo(() => ({
-    mode: cronMode,
-    time: cronTime,
-    weekday: cronWeekday,
-    monthDay: cronMonthDay,
-    advancedExpression: advancedCronExpression,
-  }), [advancedCronExpression, cronMode, cronMonthDay, cronTime, cronWeekday]);
-  const scheduleExpression = useMemo(
-    () => buildCronExpression(cronEditorValue),
-    [cronEditorValue],
-  );
-  const timezoneOptions = useMemo(
-    () => supportedScheduleTimezones(scheduleTimezone),
-    [scheduleTimezone],
-  );
-  const scheduleValid = scheduleType === "interval"
-    ? scheduleEvery > 0
-    : isValidCronExpression(scheduleExpression) && Boolean(scheduleTimezone);
   const canSubmit = Boolean(
     name.trim()
     && universeUid
     && accountUid
-    && scheduleValid
-    && cpuRequest.trim()
-    && memoryRequest.trim()
-    && maxRuntimeSeconds > 0
     && !busy
     && !dependenciesLoading
     && !dependenciesError,
@@ -503,20 +466,7 @@ export function SignalsPage({
     setDescription("");
     setUniverseUid("");
     setAccountUid("");
-    setEnabled(true);
-    setScheduleType("interval");
-    setScheduleEvery(1);
-    setSchedulePeriod("days");
-    setCronMode(DEFAULT_CRON_SCHEDULE.mode);
-    setCronTime(DEFAULT_CRON_SCHEDULE.time);
-    setCronWeekday(DEFAULT_CRON_SCHEDULE.weekday);
-    setCronMonthDay(DEFAULT_CRON_SCHEDULE.monthDay);
-    setAdvancedCronExpression(DEFAULT_CRON_SCHEDULE.advancedExpression);
-    setScheduleTimezone(browserScheduleTimezone());
-    setCpuRequest("0.25");
-    setMemoryRequest("0.5");
-    setMaxRuntimeSeconds(3600);
-    setSpot(false);
+    setScheduled(true);
   }
 
   function openCreate() {
@@ -532,23 +482,7 @@ export function SignalsPage({
     setDescription(item.description ?? "");
     setUniverseUid(item.universe_uid);
     setAccountUid(item.account_uid);
-    setEnabled(item.enabled);
-    setScheduleType(item.schedule_type);
-    setScheduleEvery(item.schedule_every ?? 1);
-    setSchedulePeriod(item.schedule_period ?? "days");
-    const cron = parseCronExpression(
-      item.schedule_expression ?? DEFAULT_CRON_SCHEDULE.advancedExpression,
-    );
-    setCronMode(cron.mode);
-    setCronTime(cron.time);
-    setCronWeekday(cron.weekday);
-    setCronMonthDay(cron.monthDay);
-    setAdvancedCronExpression(cron.advancedExpression);
-    setScheduleTimezone(item.schedule_timezone ?? "UTC");
-    setCpuRequest(item.cpu_request);
-    setMemoryRequest(item.memory_request);
-    setMaxRuntimeSeconds(item.max_runtime_seconds);
-    setSpot(item.spot);
+    setScheduled(item.scheduled);
     setFormOpen(true);
     setMutation({ state: "idle" });
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -563,7 +497,7 @@ export function SignalsPage({
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!canSubmit) {
-      setMutation({ state: "error", message: "Complete the Universe, account, schedule, and compute fields." });
+      setMutation({ state: "error", message: "Complete the name, Universe, and account fields." });
       return;
     }
     const request: SignalJobConfigurationWriteRequest = {
@@ -571,19 +505,9 @@ export function SignalsPage({
       description: description.trim() || null,
       universe_uid: universeUid,
       account_uid: accountUid,
-      enabled,
-      schedule_type: scheduleType,
-      schedule_every: scheduleType === "interval" ? scheduleEvery : null,
-      schedule_period: scheduleType === "interval" ? schedulePeriod : null,
-      schedule_expression: scheduleType === "crontab" ? scheduleExpression.trim() : null,
-      schedule_timezone: scheduleType === "crontab" ? scheduleTimezone : null,
-      schedule_start_time: null,
-      cpu_request: cpuRequest.trim(),
-      memory_request: memoryRequest.trim(),
-      max_runtime_seconds: maxRuntimeSeconds,
-      spot,
+      scheduled,
     };
-    setMutation({ state: "loading", label: editing ? "Updating signal Job" : "Creating signal Job" });
+    setMutation({ state: "loading", label: editing ? "Updating signal" : "Creating signal" });
     try {
       if (editing) {
         await api.patch<SignalJobConfiguration>(
@@ -648,7 +572,7 @@ export function SignalsPage({
     onSelect: openCreate,
   }], [formOpen]);
   const rowActions = useMemo<readonly ResourceRowAction<SignalJobConfiguration>[]>(() => [
-    { id: "run-signal-job", label: "Run now", disabled: (item) => !item.enabled || item.job_image_status !== "ready", onSelect: (item) => void runSignalJob(item) },
+    { id: "run-signal-job", label: "Run now", disabled: (item) => item.job?.image_status !== "ready", onSelect: (item) => void runSignalJob(item) },
     { id: "edit-signal-job", label: "Edit", onSelect: openEdit },
     { id: "delete-signal-job", label: "Delete", tone: "danger", onSelect: setDeleteTarget },
   ], []);
@@ -659,7 +583,7 @@ export function SignalsPage({
         <ApplicationPageHeader
           eyebrow="Portfolios"
           title="ETF Weight Signals"
-          description="Create one canonical ms-markets Signal and one dedicated Main Sequence Job for each Universe-backed configuration. Each run extracts the current components, registers missing Alpaca assets in bulk, and publishes one observed weight frame."
+          description="Create one canonical ms-markets Signal for each Universe-backed configuration. The shared signal Job declared in the connector's workflow runs every configuration; each run extracts the current components, registers missing Alpaca assets in bulk, and publishes one observed weight frame."
         />
 
         {formOpen ? (
@@ -714,106 +638,12 @@ export function SignalsPage({
                 </div>
               </section>
 
-              <section className="workflow-form-section" aria-labelledby="signal-job-schedule-heading">
+              <section className="workflow-form-section" aria-labelledby="signal-scheduled-run-heading">
                 <div className="workflow-form-section__header">
-                  <h3 id="signal-job-schedule-heading">Job schedule</h3>
-                  <p>Choose a simple interval or build a calendar schedule. This controls when the update starts; it is not part of the signal table identity.</p>
+                  <h3 id="signal-scheduled-run-heading">Scheduled run</h3>
+                  <p>The shared signal Job declared in the connector&apos;s workflow runs every scheduled signal once a day; its schedule is shown on the signal&apos;s details page. A signal left out can still be run manually.</p>
                 </div>
-                <div className="form-grid">
-                  <label className="field">Scheduling method
-                    <select value={scheduleType} onChange={(event) => setScheduleType(event.target.value as SignalScheduleType)} disabled={busy}>
-                      <option value="interval">Interval</option>
-                      <option value="crontab">Calendar schedule</option>
-                    </select>
-                  </label>
-                  {scheduleType === "interval" ? (
-                    <>
-                      <label className="field">Run every
-                        <input type="number" min={1} value={scheduleEvery} onChange={(event) => setScheduleEvery(Number(event.target.value))} disabled={busy} />
-                      </label>
-                      <label className="field">Interval period
-                        <select value={schedulePeriod} onChange={(event) => setSchedulePeriod(event.target.value as SignalSchedulePeriod)} disabled={busy}>
-                          <option value="minutes">Minutes</option>
-                          <option value="hours">Hours</option>
-                          <option value="days">Days</option>
-                        </select>
-                      </label>
-                    </>
-                  ) : (
-                    <>
-                      <label className="field">Calendar pattern
-                        <select value={cronMode} onChange={(event) => setCronMode(event.target.value as CronScheduleMode)} disabled={busy}>
-                          <option value="daily">Every day</option>
-                          <option value="weekdays">Monday through Friday</option>
-                          <option value="weekly">Once a week</option>
-                          <option value="monthly">Once a month</option>
-                          <option value="advanced">Advanced crontab</option>
-                        </select>
-                      </label>
-                      {cronMode === "advanced" ? (
-                        <label className="field">Five-field crontab
-                          <input
-                            aria-describedby="signal-cron-help"
-                            value={advancedCronExpression}
-                            onChange={(event) => setAdvancedCronExpression(event.target.value)}
-                            placeholder="0 9 * * 1-5"
-                            spellCheck={false}
-                            disabled={busy}
-                          />
-                        </label>
-                      ) : (
-                        <label className="field">Schedule time
-                          <input type="time" value={cronTime} onChange={(event) => setCronTime(event.target.value)} disabled={busy} />
-                        </label>
-                      )}
-                      {cronMode === "weekly" ? (
-                        <label className="field">Day of week
-                          <select value={cronWeekday} onChange={(event) => setCronWeekday(event.target.value)} disabled={busy}>
-                            {CRON_WEEKDAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
-                          </select>
-                        </label>
-                      ) : null}
-                      {cronMode === "monthly" ? (
-                        <label className="field">Day of month
-                          <input type="number" min={1} max={31} value={cronMonthDay} onChange={(event) => setCronMonthDay(Number(event.target.value))} disabled={busy} />
-                        </label>
-                      ) : null}
-                      <label className="field">Timezone
-                        <select value={scheduleTimezone} onChange={(event) => setScheduleTimezone(event.target.value)} disabled={busy}>
-                          {timezoneOptions.map((timezone) => <option key={timezone} value={timezone}>{timezone}</option>)}
-                        </select>
-                      </label>
-                      <div className="schedule-preview field--wide" aria-live="polite">
-                        <div>
-                          <span>Generated schedule</span>
-                          <strong>{describeCronSchedule(cronEditorValue, scheduleTimezone)}</strong>
-                        </div>
-                        <code>{scheduleExpression || "Invalid schedule"}</code>
-                        <small id="signal-cron-help">Main Sequence evaluates the five-field crontab in the selected IANA timezone. Daylight-saving changes follow that timezone; the Job keeps the same local clock time.</small>
-                      </div>
-                    </>
-                  )}
-                </div>
-                <label className="checkbox-field"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} disabled={busy} />Enabled and scheduled</label>
-              </section>
-
-              <section className="workflow-form-section" aria-labelledby="signal-job-resources-heading">
-                <div className="workflow-form-section__header">
-                  <h3 id="signal-job-resources-heading">Job resources</h3>
-                  <p>Execution capacity and timeout for this dedicated Job.</p>
-                </div>
-                <div className="form-grid">
-                  <label className="field">CPU request
-                    <input value={cpuRequest} onChange={(event) => setCpuRequest(event.target.value)} disabled={busy} />
-                  </label>
-                  <label className="field">Memory request (GiB)
-                    <input value={memoryRequest} onChange={(event) => setMemoryRequest(event.target.value)} disabled={busy} />
-                  </label>
-                  <label className="field">Maximum runtime (seconds)
-                    <input type="number" min={1} value={maxRuntimeSeconds} onChange={(event) => setMaxRuntimeSeconds(Number(event.target.value))} disabled={busy} />
-                  </label>
-                </div>
-                <label className="checkbox-field"><input type="checkbox" checked={spot} onChange={(event) => setSpot(event.target.checked)} disabled={busy} />Prefer spot capacity</label>
+                <label className="checkbox-field"><input type="checkbox" checked={scheduled} onChange={(event) => setScheduled(event.target.checked)} disabled={busy} />Include in the shared signal Job&apos;s daily scheduled run</label>
               </section>
               {dependenciesError ? <p className="form-error" role="alert">{dependenciesError}</p> : null}
               <div className="form-actions">
@@ -822,7 +652,7 @@ export function SignalsPage({
               </div>
               <div className="workflow-guidance">
                 <Info aria-hidden="true" size={18} />
-                <p><strong>Universe</strong> defines the stable signal identity. The account is serialized updater input only: it resolves Secret names and registers missing assets, but is never written into the signal UID or signal weights table. The Job schedule controls when the updater starts. Every start forces one complete observation; that execution rule is fixed for this signal and is not another user-editable schedule field. Published timestamps are observations and do not guarantee the exact economic effective time of ETF weights.</p>
+                <p><strong>Universe</strong> defines the stable signal identity. The account is serialized updater input only: it resolves Secret names and registers missing assets, but is never written into the signal UID or signal weights table. The shared Job&apos;s schedule controls when the updater starts. Every start forces one complete observation; that execution rule is fixed for this signal and is not another user-editable schedule field. Published timestamps are observations and do not guarantee the exact economic effective time of ETF weights.</p>
               </div>
             </form>
           </ApplicationCard>
@@ -841,6 +671,10 @@ export function SignalsPage({
             configuration={selectedSignal}
             transport={transport}
             onBack={() => setSelectedSignal(null)}
+            onConfigurationChange={(configuration) => {
+              setSelectedSignal(configuration);
+              setRefreshKey((current) => current + 1);
+            }}
           />
         ) : (
           <ResourceListPage
@@ -860,9 +694,9 @@ export function SignalsPage({
       <ResourceActionConfirmationDialog
         open={deleteTarget !== null}
         actionLabel="Delete"
-        title="Delete signal Job"
+        title="Delete signal"
         selectionLabel={deleteTarget?.name ?? "signal"}
-        description="Delete this dedicated Main Sequence Job and its durable configuration."
+        description="Delete this durable signal configuration. The shared signal Job and its past runs remain."
         warning="Existing SignalWeights observations are retained."
         confirmationWord="DELETE"
         confirmationValue={deleteConfirmation}

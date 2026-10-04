@@ -65,6 +65,6 @@ request failed** rather than a broader portfolio label.
 
 The ETF Portfolios page stores only calculation intent in the Portfolio Configuration: references
 to an existing Signal Configuration, Bars Configuration, and Rebalance Configuration plus the
-supported interpolation and portfolio parameters. Schedule, compute, image, and deployment state
-are read from and written to the dedicated Main Sequence Job. The page does not duplicate those
-operational fields in the Portfolio Configuration.
+supported interpolation and portfolio parameters, and its `scheduled` flag. Schedule, compute,
+image, and deployment state belong to the shared portfolio Job that the connector declares in its
+workflow file; the signal and portfolio pages show that Job read-only and never write it.
