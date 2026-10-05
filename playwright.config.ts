@@ -22,5 +22,17 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 30_000,
     },
+    {
+      // Vite development: its proxy adds the developer's session token to API requests. Here the
+      // proxy targets the fixture API and the token comes from a synthetic CLI.
+      command: "npm run dev -- --host 127.0.0.1 --port 4275 --strictPort",
+      url: "http://127.0.0.1:4275",
+      reuseExistingServer: false,
+      timeout: 60_000,
+      env: {
+        VITE_API_BASE_URL: "http://127.0.0.1:4274",
+        MAINSEQUENCE_CLI: "scripts/e2e-mainsequence-cli.mjs",
+      },
+    },
   ],
 });

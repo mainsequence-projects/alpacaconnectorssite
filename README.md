@@ -9,12 +9,21 @@ and stores them as Main Sequence Secrets, and the application never displays the
 ## Local development
 
 Use Node 24 and start the Alpaca Connectors FastAPI process on `http://127.0.0.1:8321`. The
-tracked `.env.development` points standalone Vite development at that API, so then run:
+API authenticates every caller (connector ADR 0014); locally it needs a Main Sequence Bearer
+token. Log in once with the Main Sequence CLI for the backend in the API's `MAINSEQUENCE_ENDPOINT`,
+then run:
 
 ```bash
 npm ci
 npm run dev
 ```
+
+The browser calls the Vite dev server, whose proxy forwards `/v1/` and `/health` to the API in
+`VITE_API_BASE_URL` (tracked in `.env.development`) and adds `Authorization: Bearer` with a token
+from `mainsequence auth token --json`, renewed before it expires. The token stays in the dev server
+process. The proxy uses the CLI named by `MAINSEQUENCE_CLI`, else `mainsequence` on `PATH`; set
+`MAINSEQUENCE_CLI` to the API checkout's `.venv/bin/mainsequence` when the CLI is not on `PATH`.
+Without a session, API requests answer 401 with the reason.
 
 The direct API transport is deliberately limited to development and end-to-end builds. A normal
 production build requires the Command Center iframe bridge. Its FastAPI ResourceRelease UID is

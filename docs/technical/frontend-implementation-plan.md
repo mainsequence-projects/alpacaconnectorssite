@@ -61,7 +61,9 @@ Portable widgets and workspaces:
 
 Backend adapters and contracts:
 : A single application transport selects the SDK delegated FastAPI client when embedded and a
-  direct unauthenticated local fetch only during Vite development. Typed response guards keep
+  direct local fetch only during Vite development and end-to-end builds. In Vite development that
+  fetch goes to the dev server, whose proxy adds the developer's Main Sequence session token, so the
+  browser never holds a token. Typed response guards keep
   malformed responses out of the UI. The Accounts route sends Alpaca keys only as write-only
   request fields that the API stores as Main Sequence Secrets, and never receives them back. The
   Universes route accepts an explicit source URL when the universe is created and does not load
@@ -189,7 +191,8 @@ discovery column IDs exactly match every local renderer.
 
 - `VITE_COMMAND_CENTER_ORIGIN`: exact trusted parent origin for the iframe protocol.
 - `VITE_FASTAPI_RESOURCE_RELEASE_UID`: public target FastAPI ResourceRelease UID.
-- `VITE_API_BASE_URL`: local Vite-development API URL only; it is ignored by production builds.
+- `VITE_API_BASE_URL`: the local API URL the Vite dev server proxies to, and the end-to-end
+  fixture API; it is ignored by production builds.
 
 All three values are public routing configuration. None may contain an access token or Alpaca
 credential.

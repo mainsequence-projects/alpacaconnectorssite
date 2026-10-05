@@ -13,18 +13,31 @@ decode, persist, log, or construct authorization headers.
 A direct fetch transport is available only in Vite development and end-to-end builds. A direct
 production visit fails closed with an application status screen.
 
+The API authenticates every caller (connector ADR 0014). Inside Command Center the SDK's
+`fetchFastApi` sends `Authorization: Bearer` with the delegated credential and
+`X-Resource-Release-UID` on every request, and the platform gateway turns it into the caller
+assertion the API verifies. A local API instead needs the developer's Main Sequence token as a
+Bearer. In Vite development the browser therefore calls its own dev server, and the dev server
+(`vite.config.ts`) proxies `/v1/` and `/health` to `VITE_API_BASE_URL`, adding
+`Authorization: Bearer` with a token from `mainsequence auth token --json`. It reuses the token
+until a minute before it expires, asks again after the API answers 401, and answers 401 with the
+reason when the CLI has no session. The token never reaches the browser, a URL, a file, or a log.
+The CLI is `MAINSEQUENCE_CLI`, else `mainsequence` on `PATH`, and its session must be for the
+backend in the API's `MAINSEQUENCE_ENDPOINT`. End-to-end builds call their fixture API directly.
+
 ## Runtime configuration
 
 | Variable | Purpose |
 | --- | --- |
 | `VITE_COMMAND_CENTER_ORIGIN` | Exact trusted parent origin for the iframe protocol |
 | `VITE_FASTAPI_RESOURCE_RELEASE_UID` | Public target FastAPI ResourceRelease UID |
-| `VITE_API_BASE_URL` | Local development API origin (`http://127.0.0.1:8321`); ignored by normal production builds |
+| `VITE_API_BASE_URL` | Local API origin (`http://127.0.0.1:8321`) the dev server proxies to, and the end-to-end fixture API; ignored by normal production builds |
+| `MAINSEQUENCE_CLI` | Dev server only, not a `VITE_` value: the Main Sequence CLI whose `auth token` authenticates local API requests; defaults to `mainsequence` on `PATH` |
 
 These are routing values, not secrets. Alpaca API keys and Main Sequence tokens must never be added
 to static-site environment variables.
 
-The tracked `.env.development` owns the direct local URL used by `npm run dev`. Production owns the
+The tracked `.env.development` owns the local API URL that `npm run dev` proxies to. Production owns the
 FastAPI release UID through the Static Site workflow's `build_environment`; the two modes therefore
 cannot accidentally route to the Main Sequence Django development backend on port `8000`.
 

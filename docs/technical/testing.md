@@ -34,5 +34,11 @@ models (connector ADR 0009): it rejects unknown fields with 422, including the r
 `calendar_event_signal`, applies the connector's defaults, and serves the API's rebalance
 discovery columns.
 
-The browser fixture uses a fake ResourceRelease UID and synthetic delegated token. It does not call
-Alpaca or Main Sequence.
+The authentication tests check both transports against the fixture's request log: every request
+from the embedded application carries the delegated `Authorization: Bearer` and
+`X-Resource-Release-UID`, and a Vite development server (port 4275) proxies every request with the
+session token from `scripts/e2e-mainsequence-cli.mjs`, a stand-in for `mainsequence auth token`,
+while its browser requests carry no token.
+
+The browser fixture uses a fake ResourceRelease UID and synthetic delegated and session tokens. It
+does not call Alpaca or Main Sequence.

@@ -749,6 +749,10 @@ createServer(async (request, response) => {
     return;
   }
   if (url.pathname === "/__health") return sendJson(response, 200, { status: "ok" });
+  if (url.pathname === "/__requests" && request.method === "DELETE") {
+    requestLog.length = 0;
+    return sendJson(response, 200, { requests: requestLog });
+  }
   if (url.pathname === "/__requests") return sendJson(response, 200, { requests: requestLog });
 
   requestLog.push({

@@ -16,6 +16,7 @@ import { readApiResponse, type ApiTransport } from "./api";
 const CHANNEL = "mainsequence.alpaca-connectors" as const;
 const FASTAPI_RELEASE_UID = import.meta.env.VITE_FASTAPI_RESOURCE_RELEASE_UID?.trim();
 const COMMAND_CENTER_ORIGIN = import.meta.env.VITE_COMMAND_CENTER_ORIGIN?.trim();
+/** The end-to-end fixture API; in Vite development the dev server proxies to this URL instead. */
 const LOCAL_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8321";
 
 export type ApplicationTransportStatus = StaticSiteFastApiTransportStatus | "local" | "starting";
@@ -43,8 +44,13 @@ function assertRelativeApiPath(path: string) {
   }
 }
 
+/**
+ * Vite development calls its own server, whose proxy forwards to the local API and adds the
+ * developer's Main Sequence session token (vite.config.ts), so the browser never holds a token.
+ * End-to-end builds call their fixture API directly.
+ */
 function createDirectTransport(): ApiTransport {
-  const baseUrl = new URL(LOCAL_API_BASE_URL);
+  const baseUrl = new URL(import.meta.env.DEV ? window.location.origin : LOCAL_API_BASE_URL);
   return {
     async request<T>(path: string, init?: RequestInit) {
       assertRelativeApiPath(path);

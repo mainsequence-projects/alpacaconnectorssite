@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page, type Request } from "@playwright/test";
 import { assertCommandCenterPageLayout } from "@dev-mainsequence/command-center-sdk/layout/testing";
 
 async function selectRowAction(page: Page, row: Locator, label: string) {
@@ -1015,21 +1015,61 @@ test("shows rebalance request progress in a modal and labels failures accurately
   await expect(errorDialog.getByText("The operation could not be completed by a required service.", { exact: true })).toBeVisible();
 });
 
-test("uses delegated FastAPI credentials and applies host theme updates", async ({ page }) => {
+interface FixtureRequestLogEntry {
+  path: string;
+  authorization: string | null;
+  resourceReleaseUid: string | null;
+}
+
+async function fixtureRequestLog(request: APIRequestContext): Promise<FixtureRequestLogEntry[]> {
+  const response = await request.get(`${E2E_API_ORIGIN}/__requests`);
+  return ((await response.json()) as { requests: FixtureRequestLogEntry[] }).requests;
+}
+
+test("uses delegated FastAPI credentials and applies host theme updates", async ({ page, request }) => {
+  await request.delete(`${E2E_API_ORIGIN}/__requests`);
   await page.goto("http://127.0.0.1:4274/");
   const application = page.frameLocator('iframe[title="Alpaca Connectors"]');
   await expect(application.getByRole("heading", { name: "Register Alpaca-backed assets" })).toBeVisible();
   await expect(application.locator("html")).toHaveAttribute("data-theme-id", "main-sequence-space");
 
-  const requestState = await page.evaluate(async () => {
-    const response = await fetch("/__requests");
-    return response.json();
-  });
-  expect(requestState.requests.some((entry: { authorization: string | null }) => entry.authorization === "Bearer synthetic-delegated-token")).toBeTruthy();
-  expect(requestState.requests.some((entry: { resourceReleaseUid: string | null }) => entry.resourceReleaseUid === "11111111-1111-4111-8111-111111111111")).toBeTruthy();
+  // Every API request through the Command Center transport carries the delegated credential.
+  const requests = await fixtureRequestLog(request);
+  expect(requests.length).toBeGreaterThan(0);
+  for (const entry of requests) {
+    expect(entry).toMatchObject({
+      authorization: "Bearer synthetic-delegated-token",
+      resourceReleaseUid: "11111111-1111-4111-8111-111111111111",
+    });
+  }
 
   await page.evaluate(() => (window as typeof window & { switchTheme(): void }).switchTheme());
   await expect(application.locator("html")).toHaveAttribute("data-theme-id", "quartz-light");
+});
+
+test("authenticates local development API requests in the dev server, not the browser", async ({ page, request }) => {
+  const devServerOrigin = "http://127.0.0.1:4275";
+  await request.delete(`${E2E_API_ORIGIN}/__requests`);
+  const browserApiRequests: Request[] = [];
+  page.on("request", (apiRequest) => {
+    if (new URL(apiRequest.url()).pathname.startsWith("/v1/")) browserApiRequests.push(apiRequest);
+  });
+
+  await page.goto(`${devServerOrigin}/`);
+  await expect(page.getByRole("heading", { name: "Register Alpaca-backed assets" })).toBeVisible({ timeout: 30_000 });
+
+  // The browser calls its own development server and never holds a token.
+  expect(browserApiRequests.length).toBeGreaterThan(0);
+  for (const apiRequest of browserApiRequests) {
+    expect(new URL(apiRequest.url()).origin).toBe(devServerOrigin);
+    expect((await apiRequest.allHeaders()).authorization).toBeUndefined();
+  }
+  // The dev server proxy adds the session token from `mainsequence auth token` to every request.
+  const requests = await fixtureRequestLog(request);
+  expect(requests.map((entry) => entry.path)).toContain("/v1/project-state/configuration");
+  for (const entry of requests) {
+    expect(entry.authorization).toBe("Bearer synthetic-local-session-token");
+  }
 });
 
 test("serves same-artifact documentation routes", async ({ page }) => {

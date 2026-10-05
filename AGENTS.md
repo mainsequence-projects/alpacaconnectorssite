@@ -10,7 +10,10 @@ This repository is the Command Center static-site application for the Alpaca Con
 - Keep the iframe channel stable at `mainsequence.alpaca-connectors`.
 - Use delegated `fetchFastApi` calls for a configured FastAPI ResourceRelease UID. Never accept,
   persist, log, or place access tokens or Alpaca credentials in URLs.
-- Allow direct API access only in Vite development and automated end-to-end test builds.
+- Allow direct API access only in Vite development and automated end-to-end test builds. The API
+  authenticates every caller (connector ADR 0014): in Vite development the dev server proxy
+  (`vite.config.ts`) adds the developer's `mainsequence auth token` as `Authorization: Bearer`;
+  browser code never holds or constructs a token.
 - Apply every host theme context update. Use published SDK semantic variables in authored CSS and
   keep the SDK theme audit passing.
 
