@@ -37,6 +37,7 @@ import {
   API_ENDPOINTS,
   createApiClient,
   formatSharedJobSchedule,
+  US_EQUITY_REBALANCE_CALENDAR,
   type ApiTransport,
   type BarConfiguration,
   type PortfolioConfiguration,
@@ -44,7 +45,11 @@ import {
   type PortfolioConfigurationWriteRequest,
   type PortfolioJobRunAccepted,
   type PortfolioValueObservation,
+  type PortfolioRebalanceCadence,
+  type PortfolioRebalanceCalendarEvent,
   type PortfolioRebalanceConfiguration,
+  type PortfolioRebalanceConfigurationWriteRequest,
+  type PortfolioRebalanceEvent,
   type PortfolioRebalanceStrategy,
   type ResourceCollection,
   type SignalJobConfiguration,
@@ -60,10 +65,151 @@ type MutationState =
 type PortfolioSection = "portfolios" | "rebalances";
 
 const DEFAULT_COMMISSION_PERCENTAGE = "0.018";
+/** The connector's default maximum valuation staleness: one day. */
+const DEFAULT_VALUATION_MAXIMUM_STALENESS_SECONDS = "86400";
 const PORTFOLIO_OBSERVATION_LIMIT = 2_500;
+const REBALANCE_STRATEGY_LABEL = "CalendarEventSignal";
+const WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
+/** NYSE regular sessions fall on Monday through Friday only. */
+const US_EQUITY_SESSION_WEEKDAYS = [0, 1, 2, 3, 4] as const;
+const REBALANCE_EVENT_LABELS: Record<PortfolioRebalanceEvent, string> = {
+  market_open: "market open",
+  market_close: "market close",
+};
 
 function formatCommissionPercentage(commissionFee: number): string {
   return String(Number((commissionFee * 100).toFixed(10)));
+}
+
+/** Parses a whole number of seconds as the API's integer fields require; null when invalid. */
+function parseWholeSeconds(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^-?\d+$/.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/** A duration such as "1 day", "15 min", or "1 h 30 min"; the sign is ignored. */
+function formatDuration(totalSeconds: number): string {
+  const seconds = Math.abs(totalSeconds);
+  const days = Math.floor(seconds / 86_400);
+  const hours = Math.floor((seconds % 86_400) / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  const remainder = seconds % 60;
+  const parts = [
+    days ? `${days} ${days === 1 ? "day" : "days"}` : null,
+    hours ? `${hours} h` : null,
+    minutes ? `${minutes} min` : null,
+    remainder ? `${remainder} s` : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(" ") : "0 s";
+}
+
+function formatWeekday(weekday: number): string {
+  return WEEKDAY_NAMES[weekday] ?? `Weekday ${weekday}`;
+}
+
+function formatRebalanceCalendar(
+  schedule: Pick<PortfolioRebalanceCalendarEvent, "calendar_identifier" | "session_label">,
+): string {
+  return `${schedule.calendar_identifier} · ${schedule.session_label} session`;
+}
+
+/** "At market close", or the signed offset from the event, such as "15 min before market close". */
+function formatRebalanceEvent(event: PortfolioRebalanceEvent, offsetSeconds: number): string {
+  const label = REBALANCE_EVENT_LABELS[event];
+  if (offsetSeconds === 0) return `At ${label}`;
+  return `${formatDuration(offsetSeconds)} ${offsetSeconds < 0 ? "before" : "after"} ${label}`;
+}
+
+function formatRebalanceCadence(cadence: PortfolioRebalanceCadence, weekday: number): string {
+  return cadence === "weekly" ? `Weekly on ${formatWeekday(weekday)}` : "Every session";
+}
+
+function describeRebalanceSchedule(schedule: PortfolioRebalanceCalendarEvent): string {
+  const event = formatRebalanceEvent(schedule.rebalance_event, schedule.event_offset_seconds);
+  const timing = `${event.charAt(0).toLowerCase()}${event.slice(1)}`;
+  const sessions = `${schedule.calendar_identifier} ${schedule.session_label} session`;
+  return schedule.rebalance_cadence === "weekly"
+    ? `Rebalances ${timing} of each ${sessions} that falls on a ${formatWeekday(schedule.rebalance_weekday)}.`
+    : `Rebalances ${timing} of every ${sessions}.`;
+}
+
+function isUsEquityCalendar(
+  schedule: Pick<PortfolioRebalanceCalendarEvent, "calendar_identifier" | "session_label">,
+): boolean {
+  return schedule.calendar_identifier === US_EQUITY_REBALANCE_CALENDAR.calendar_identifier
+    && schedule.session_label === US_EQUITY_REBALANCE_CALENDAR.session_label;
+}
+
+/** Rebalance form state; numeric inputs stay strings until they are validated. */
+interface RebalanceDraft {
+  name: string;
+  description: string;
+  strategy: PortfolioRebalanceStrategy;
+  calendarIdentifier: string;
+  sessionLabel: string;
+  event: PortfolioRebalanceEvent;
+  offsetSeconds: string;
+  cadence: PortfolioRebalanceCadence;
+  weekday: number;
+}
+
+function newRebalanceDraft(): RebalanceDraft {
+  return {
+    name: "",
+    description: "",
+    strategy: "calendar_event_signal",
+    calendarIdentifier: US_EQUITY_REBALANCE_CALENDAR.calendar_identifier,
+    sessionLabel: US_EQUITY_REBALANCE_CALENDAR.session_label,
+    event: "market_close",
+    offsetSeconds: "0",
+    cadence: "every_session",
+    weekday: 0,
+  };
+}
+
+/** Editing keeps the stored calendar and session; the form never rewrites them. */
+function rebalanceDraftFromConfiguration(configuration: PortfolioRebalanceConfiguration): RebalanceDraft {
+  return {
+    name: configuration.name,
+    description: configuration.description ?? "",
+    strategy: configuration.strategy,
+    calendarIdentifier: configuration.calendar_identifier,
+    sessionLabel: configuration.session_label,
+    event: configuration.rebalance_event,
+    offsetSeconds: String(configuration.event_offset_seconds),
+    cadence: configuration.rebalance_cadence,
+    weekday: configuration.rebalance_weekday,
+  };
+}
+
+/** The draft's calendar-event fields; null while the offset is not a whole number of seconds. */
+function rebalanceScheduleFromDraft(draft: RebalanceDraft): PortfolioRebalanceCalendarEvent | null {
+  const offsetSeconds = parseWholeSeconds(draft.offsetSeconds);
+  if (offsetSeconds === null) return null;
+  return {
+    calendar_identifier: draft.calendarIdentifier,
+    session_label: draft.sessionLabel,
+    rebalance_event: draft.event,
+    event_offset_seconds: offsetSeconds,
+    rebalance_cadence: draft.cadence,
+    // The weekday applies only to weekly cadence; every-session policies store the default.
+    rebalance_weekday: draft.cadence === "weekly" ? draft.weekday : 0,
+  };
+}
+
+/** The exact create (and edit PATCH) body; null while the draft is incomplete or invalid. */
+function rebalanceWriteRequest(draft: RebalanceDraft): PortfolioRebalanceConfigurationWriteRequest | null {
+  const name = draft.name.trim();
+  const schedule = rebalanceScheduleFromDraft(draft);
+  if (!name || !schedule) return null;
+  return {
+    name,
+    description: draft.description.trim() || null,
+    strategy: draft.strategy,
+    ...schedule,
+  };
 }
 
 function formatPortfolioValue(value: number | null): string {
@@ -141,9 +287,9 @@ function usePortfolioChartColor(): string {
 
 const REBALANCE_STRATEGY_OPTIONS: ResourcePickerOption[] = [
   {
-    value: "immediate_signal",
-    label: "Immediate Signal",
-    subtitle: "Apply every observed signal weight frame immediately",
+    value: "calendar_event_signal",
+    label: "Calendar Event Signal",
+    subtitle: "Execute the latest observed weights at each selected session event",
   },
 ];
 
@@ -203,7 +349,7 @@ function buildPortfolioResource(transport: ApiTransport) {
     id: "alpaca-etf-portfolio-configurations",
     label: "ETF Portfolios",
     itemLabel: "portfolio configuration",
-    description: "Durable analytical portfolios composed from ETF weight signals, Alpaca bars, and ImmediateSignal rebalance configurations.",
+    description: "Durable analytical portfolios composed from ETF weight signals, Alpaca bars, and CalendarEventSignal rebalance configurations.",
     getId: (configuration: PortfolioConfiguration) => configuration.uid,
     adapter,
     columns: [
@@ -224,7 +370,7 @@ function buildPortfolioResource(transport: ApiTransport) {
         id: "rebalance-strategy",
         header: "Rebalance",
         getValue: (configuration) => configuration.rebalance_strategy,
-        renderCell: () => <ResourceStatusCell label="ImmediateSignal" tone="neutral" />,
+        renderCell: () => <ResourceStatusCell label={REBALANCE_STRATEGY_LABEL} tone="neutral" />,
       },
       {
         id: "job-image-status",
@@ -294,7 +440,7 @@ function buildRebalanceResource(transport: ApiTransport) {
     id: "portfolio-rebalance-configurations",
     label: "Rebalance Configurations",
     itemLabel: "rebalance configuration",
-    description: "Reusable analytical rebalance policies. Phase 1 supports ImmediateSignal only.",
+    description: "Reusable calendar-event rebalance policies: the latest observed ETF weights execute at selected NYSE session events.",
     getId: (configuration: PortfolioRebalanceConfiguration) => configuration.uid,
     adapter,
     columns: [
@@ -315,7 +461,28 @@ function buildRebalanceResource(transport: ApiTransport) {
         id: "strategy",
         header: "Strategy",
         getValue: (configuration) => configuration.strategy,
-        renderCell: () => <ResourceStatusCell label="ImmediateSignal" tone="neutral" />,
+        renderCell: () => <ResourceStatusCell label={REBALANCE_STRATEGY_LABEL} tone="neutral" />,
+      },
+      {
+        id: "calendar-identifier",
+        header: "Calendar",
+        getValue: (configuration) => formatRebalanceCalendar(configuration),
+      },
+      {
+        id: "rebalance-event",
+        header: "Market Event",
+        getValue: (configuration) => formatRebalanceEvent(
+          configuration.rebalance_event,
+          configuration.event_offset_seconds,
+        ),
+      },
+      {
+        id: "rebalance-cadence",
+        header: "Cadence",
+        getValue: (configuration) => formatRebalanceCadence(
+          configuration.rebalance_cadence,
+          configuration.rebalance_weekday,
+        ),
       },
       {
         id: "updated-at",
@@ -564,7 +731,7 @@ function PortfolioDetail({
               title: resolved.name,
             },
             badges: [
-              { key: "strategy", label: "ImmediateSignal", tone: "default" },
+              { key: "strategy", label: REBALANCE_STRATEGY_LABEL, tone: "default" },
               {
                 key: "materialization",
                 label: canonicalPortfolio?.materialized ? "Materialized" : "Awaiting first run",
@@ -685,7 +852,10 @@ function PortfolioDetail({
                   <h3>Rebalance</h3>
                   <dl className="portfolio-detail-tree">
                     <div><dt>Rebalance policy</dt><dd>{detail.linked_rebalance.name}</dd></div>
-                    <div><dt>Rebalance mode</dt><dd>ImmediateSignal</dd></div>
+                    <div><dt>Rebalance strategy</dt><dd>{REBALANCE_STRATEGY_LABEL}</dd></div>
+                    <div><dt>Rebalance calendar</dt><dd>{formatRebalanceCalendar(detail.linked_rebalance)}</dd></div>
+                    <div><dt>Rebalance event</dt><dd>{formatRebalanceEvent(detail.linked_rebalance.rebalance_event, detail.linked_rebalance.event_offset_seconds)}</dd></div>
+                    <div><dt>Rebalance cadence</dt><dd>{formatRebalanceCadence(detail.linked_rebalance.rebalance_cadence, detail.linked_rebalance.rebalance_weekday)}</dd></div>
                     <div><dt>Rebalance description</dt><dd>{detail.linked_rebalance.description ?? "No description"}</dd></div>
                     <div><dt>Portfolio description</dt><dd>{detail.canonical_portfolio.description ?? detail.description ?? "No description"}</dd></div>
                   </dl>
@@ -713,10 +883,10 @@ function PortfolioDetail({
                   </dl>
                 </section>
                 <section className="portfolio-detail-subpanel">
-                  <h3>Interpolation and portfolio output</h3>
+                  <h3>Interpolation and valuation alignment</h3>
                   <dl className="portfolio-detail-tree">
                     <div><dt>Persistent interpolation</dt><dd>{detail.upsample_frequency_id} · forward fill</dd></div>
-                    <div><dt>Portfolio valuation cadence</dt><dd>{detail.portfolio_prices_frequency ?? "Source cadence"}</dd></div>
+                    <div><dt>Maximum price staleness</dt><dd>{formatDuration(detail.valuation_maximum_staleness_seconds)} ({detail.valuation_maximum_staleness_seconds} seconds)</dd></div>
                     <div><dt>Portfolio value column</dt><dd>{detail.canonical_portfolio.backtest_price_column ?? detail.valuation_column}</dd></div>
                   </dl>
                 </section>
@@ -749,8 +919,7 @@ function PortfolioDetail({
                     <div><dt>Calendar</dt><dd>{detail.canonical_portfolio.calendar_name ?? "Not materialized"}{detail.canonical_portfolio.calendar_type ? ` · ${detail.canonical_portfolio.calendar_type}` : ""}</dd></div>
                     <div><dt>Calendar timezone</dt><dd>{detail.canonical_portfolio.calendar_timezone ?? "Not specified"}</dd></div>
                     <div><dt>Calendar validity</dt><dd>{formatDateRange(detail.canonical_portfolio.calendar_valid_from, detail.canonical_portfolio.calendar_valid_to)}</dd></div>
-                    <div><dt>Extend latest prices to now</dt><dd>{detail.forward_fill_to_now ? "Enabled" : "Disabled"}</dd></div>
-                    <div><dt>Missing-price policy</dt><dd>{detail.fail_on_missing_prices ? "Stop when a required asset has no price" : "Continue when a usable portfolio frame remains"}</dd></div>
+                    <div><dt>Missing-price policy</dt><dd>{detail.fail_on_missing_prices ? "Stop when a required asset has no price within the staleness limit" : "Continue without a missing price"}</dd></div>
                     <div><dt>Configuration created</dt><dd>{formatDateTime(detail.created_at)}</dd></div>
                     <div><dt>Configuration updated</dt><dd>{formatDateTime(detail.updated_at)}</dd></div>
                   </dl>
@@ -761,7 +930,7 @@ function PortfolioDetail({
 
           <aside className="workflow-guidance" aria-label="Portfolio analytical limitation">
             <Info aria-hidden="true" size={18} />
-            <p>This is an analytical observation-time backtest. Each observed ETF weight Signal is applied immediately; it does not claim perfect point-in-time holdings or model execution latency, fills, impact, or slippage beyond the configured commission fee.</p>
+            <p>This is an analytical calendar-executed reconstruction. At each configured session event it applies the latest ETF weights observed at or before that event; it does not claim perfect point-in-time holdings or model execution latency, fills, impact, or slippage beyond the configured commission fee.</p>
           </aside>
         </div>
       ) : null}
@@ -794,7 +963,7 @@ export function PortfoliosPage({
   const [barsConfigurationUid, setBarsConfigurationUid] = useState("");
   const [rebalanceConfigurationUid, setRebalanceConfigurationUid] = useState("");
   const [valuationColumn, setValuationColumn] = useState("close");
-  const [forwardFillToNow, setForwardFillToNow] = useState(false);
+  const [maximumStalenessSeconds, setMaximumStalenessSeconds] = useState(DEFAULT_VALUATION_MAXIMUM_STALENESS_SECONDS);
   const [failOnMissingPrices, setFailOnMissingPrices] = useState(true);
   const [commissionPercentage, setCommissionPercentage] = useState(DEFAULT_COMMISSION_PERCENTAGE);
   const [scheduled, setScheduled] = useState(true);
@@ -808,9 +977,21 @@ export function PortfoliosPage({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [rebalanceFormOpen, setRebalanceFormOpen] = useState(false);
   const [editingRebalance, setEditingRebalance] = useState<PortfolioRebalanceConfiguration | null>(null);
-  const [rebalanceName, setRebalanceName] = useState("");
-  const [rebalanceDescription, setRebalanceDescription] = useState("");
-  const [rebalanceStrategy, setRebalanceStrategy] = useState<PortfolioRebalanceStrategy>("immediate_signal");
+  const [rebalanceDraft, setRebalanceDraft] = useState<RebalanceDraft>(newRebalanceDraft);
+  const rebalanceSchedule = useMemo(() => rebalanceScheduleFromDraft(rebalanceDraft), [rebalanceDraft]);
+  const rebalanceRequest = useMemo(() => rebalanceWriteRequest(rebalanceDraft), [rebalanceDraft]);
+  const rebalanceWeekdayOptions = useMemo<number[]>(() => {
+    if (!isUsEquityCalendar({ calendar_identifier: rebalanceDraft.calendarIdentifier, session_label: rebalanceDraft.sessionLabel })) {
+      return WEEKDAY_NAMES.map((_, weekday) => weekday);
+    }
+    const sessionWeekdays: number[] = [...US_EQUITY_SESSION_WEEKDAYS];
+    // Keep a stored weekend weekday visible instead of silently replacing it.
+    return sessionWeekdays.includes(rebalanceDraft.weekday) ? sessionWeekdays : [...sessionWeekdays, rebalanceDraft.weekday];
+  }, [rebalanceDraft.calendarIdentifier, rebalanceDraft.sessionLabel, rebalanceDraft.weekday]);
+
+  function updateRebalanceDraft(changes: Partial<RebalanceDraft>) {
+    setRebalanceDraft((current) => ({ ...current, ...changes }));
+  }
 
   useEffect(() => {
     if (!portfolioFormOpen) return;
@@ -852,12 +1033,18 @@ export function PortfoliosPage({
   const rebalanceOptions = useMemo<ResourcePickerOption[]>(() => rebalances.map((configuration) => ({
     value: configuration.uid,
     label: configuration.name,
-    subtitle: "ImmediateSignal",
+    subtitle: [
+      configuration.calendar_identifier,
+      formatRebalanceEvent(configuration.rebalance_event, configuration.event_offset_seconds),
+      formatRebalanceCadence(configuration.rebalance_cadence, configuration.rebalance_weekday),
+    ].join(" · "),
   })), [rebalances]);
   const parsedCommissionPercentage = Number(commissionPercentage);
   const commissionValid = commissionPercentage.trim() !== ""
     && Number.isFinite(parsedCommissionPercentage)
     && parsedCommissionPercentage >= 0;
+  const parsedMaximumStalenessSeconds = parseWholeSeconds(maximumStalenessSeconds);
+  const maximumStalenessValid = parsedMaximumStalenessSeconds !== null && parsedMaximumStalenessSeconds > 0;
   const busy = mutation.state === "loading";
   const canSubmit = Boolean(
     name.trim()
@@ -866,6 +1053,7 @@ export function PortfoliosPage({
     && rebalanceConfigurationUid
     && valuationColumn.trim()
     && commissionValid
+    && maximumStalenessValid
     && !busy
     && !dependenciesLoading
     && !dependenciesError,
@@ -879,7 +1067,7 @@ export function PortfoliosPage({
     setBarsConfigurationUid("");
     setRebalanceConfigurationUid("");
     setValuationColumn("close");
-    setForwardFillToNow(false);
+    setMaximumStalenessSeconds(DEFAULT_VALUATION_MAXIMUM_STALENESS_SECONDS);
     setFailOnMissingPrices(true);
     setCommissionPercentage(DEFAULT_COMMISSION_PERCENTAGE);
     setScheduled(true);
@@ -900,7 +1088,7 @@ export function PortfoliosPage({
     setBarsConfigurationUid(item.bars_configuration_uid);
     setRebalanceConfigurationUid(item.rebalance_configuration_uid);
     setValuationColumn(item.valuation_column);
-    setForwardFillToNow(item.forward_fill_to_now);
+    setMaximumStalenessSeconds(String(item.valuation_maximum_staleness_seconds));
     setFailOnMissingPrices(item.fail_on_missing_prices);
     setCommissionPercentage(formatCommissionPercentage(item.commission_fee));
     setScheduled(item.scheduled);
@@ -911,7 +1099,7 @@ export function PortfoliosPage({
 
   async function submitPortfolio(event: FormEvent) {
     event.preventDefault();
-    if (!canSubmit) {
+    if (!canSubmit || parsedMaximumStalenessSeconds === null) {
       setMutation({ state: "error", message: "Complete the signal, bars, rebalance, and calculation fields." });
       return;
     }
@@ -924,8 +1112,7 @@ export function PortfoliosPage({
       upsample_frequency_id: "1d",
       intraday_bar_interpolation_rule: "ffill",
       valuation_column: valuationColumn.trim(),
-      portfolio_prices_frequency: "1d",
-      forward_fill_to_now: forwardFillToNow,
+      valuation_maximum_staleness_seconds: parsedMaximumStalenessSeconds,
       fail_on_missing_prices: failOnMissingPrices,
       commission_fee: parsedCommissionPercentage / 100,
       scheduled,
@@ -960,30 +1147,22 @@ export function PortfoliosPage({
 
   function openCreateRebalance() {
     setEditingRebalance(null);
-    setRebalanceName("");
-    setRebalanceDescription("");
-    setRebalanceStrategy("immediate_signal");
+    setRebalanceDraft(newRebalanceDraft());
     setRebalanceFormOpen(true);
     setMutation({ state: "idle" });
   }
 
   function openEditRebalance(item: PortfolioRebalanceConfiguration) {
     setEditingRebalance(item);
-    setRebalanceName(item.name);
-    setRebalanceDescription(item.description ?? "");
-    setRebalanceStrategy(item.strategy);
+    setRebalanceDraft(rebalanceDraftFromConfiguration(item));
     setRebalanceFormOpen(true);
     setMutation({ state: "idle" });
   }
 
   async function submitRebalance(event: FormEvent) {
     event.preventDefault();
-    if (!rebalanceName.trim()) return;
-    const payload = {
-      name: rebalanceName.trim(),
-      description: rebalanceDescription.trim() || null,
-      strategy: rebalanceStrategy,
-    };
+    if (!rebalanceRequest) return;
+    const payload = rebalanceRequest;
     setMutation({ state: "loading", label: editingRebalance ? "Updating rebalance configuration" : "Creating rebalance configuration" });
     try {
       if (editingRebalance) {
@@ -993,9 +1172,7 @@ export function PortfoliosPage({
       }
       setRebalanceFormOpen(false);
       setEditingRebalance(null);
-      setRebalanceName("");
-      setRebalanceDescription("");
-      setRebalanceStrategy("immediate_signal");
+      setRebalanceDraft(newRebalanceDraft());
       setMutation({ state: "success", message: `${editingRebalance ? "Updated" : "Created"} ${payload.name}.` });
       setRebalanceRefreshKey((current) => current + 1);
     } catch (error) {
@@ -1050,8 +1227,8 @@ export function PortfoliosPage({
           eyebrow="Portfolios"
           title={manageRebalances ? "Rebalance Configurations" : "ETF Portfolios"}
           description={manageRebalances
-            ? "Maintain reusable analytical rebalance policies. Phase 1 exposes only ImmediateSignal."
-            : "Compose an existing ETF weight Signal, an Alpaca Bars Configuration, persistent interpolated prices, and an ImmediateSignal rebalance policy. The shared portfolio Job declared in the connector's workflow runs every Portfolio Configuration."}
+            ? "Maintain reusable CalendarEventSignal policies that execute the latest observed ETF weights at selected NYSE session events."
+            : "Compose an existing ETF weight Signal, an Alpaca Bars Configuration, persistent interpolated prices, and a CalendarEventSignal rebalance policy. The shared portfolio Job declared in the connector's workflow runs every Portfolio Configuration."}
         />
 
         {portfolioFormOpen && !manageRebalances ? (
@@ -1075,7 +1252,7 @@ export function PortfoliosPage({
                   </div>
                   <div className="field resource-picker-field">
                     <label id="portfolio-rebalance-label">Rebalance Configuration</label>
-                    <ResourcePicker ariaLabelledBy="portfolio-rebalance-label" disabled={busy || dependenciesLoading} emptyMessage="No Rebalance Configurations. Create one from the list action." fullWidth loading={dependenciesLoading} mode="single" onValueChange={setRebalanceConfigurationUid} options={rebalanceOptions} placeholder="Select an ImmediateSignal configuration" searchable searchPlaceholder="Search Rebalance Configurations" value={rebalanceConfigurationUid || null} />
+                    <ResourcePicker ariaLabelledBy="portfolio-rebalance-label" disabled={busy || dependenciesLoading} emptyMessage="No Rebalance Configurations. Create one from the list action." fullWidth loading={dependenciesLoading} mode="single" onValueChange={setRebalanceConfigurationUid} options={rebalanceOptions} placeholder="Select a Rebalance Configuration" searchable searchPlaceholder="Search Rebalance Configurations" value={rebalanceConfigurationUid || null} />
                   </div>
                   <label className="field">Valuation column<input value={valuationColumn} onChange={(event) => setValuationColumn(event.target.value)} disabled={busy} /></label>
                   <div className="field">
@@ -1095,40 +1272,46 @@ export function PortfoliosPage({
                     </div>
                     <small id="portfolio-commission-percentage-help" className="field-help">Enter percentage points. For example, 0.018% is stored and submitted as 0.00018.</small>
                   </div>
+                  <div className="field">
+                    <label htmlFor="portfolio-maximum-staleness">Maximum price staleness (seconds)</label>
+                    <div className="field-input-with-unit">
+                      <input
+                        id="portfolio-maximum-staleness"
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={maximumStalenessSeconds}
+                        onChange={(event) => setMaximumStalenessSeconds(event.target.value)}
+                        disabled={busy}
+                        aria-describedby="portfolio-maximum-staleness-help"
+                        aria-invalid={!maximumStalenessValid}
+                      />
+                      <span className="field-input-with-unit__unit" aria-hidden="true">s</span>
+                    </div>
+                    <small id="portfolio-maximum-staleness-help" className="field-help">
+                      {maximumStalenessValid && parsedMaximumStalenessSeconds !== null
+                        ? `A price may be up to ${formatDuration(parsedMaximumStalenessSeconds)} old at a real rebalance or valuation timestamp.`
+                        : "Enter a whole number of seconds greater than zero; 86400 is one day."}
+                    </small>
+                  </div>
                 </div>
                 <fieldset className="policy-fieldset">
-                  <legend>Price availability policies</legend>
-                  <div className="policy-option-grid">
-                    <label className="policy-option">
-                      <input
-                        type="checkbox"
-                        checked={forwardFillToNow}
-                        onChange={(event) => setForwardFillToNow(event.target.checked)}
-                        disabled={busy}
-                        aria-labelledby="portfolio-forward-fill-label"
-                        aria-describedby="portfolio-forward-fill-help"
-                      />
-                      <span className="policy-option__copy">
-                        <strong id="portfolio-forward-fill-label">Extend latest valuation prices to now</strong>
-                        <small id="portfolio-forward-fill-help">Assume each Asset&apos;s last known price remains unchanged through the current UTC time. Example: if the last price is $100 on January 1 and the portfolio runs daily through September 1, the calculation uses $100 for every daily timestamp through September 1 unless a newer price exists. This happens only in memory; it does not write synthetic <strong>InterpolatedPrices</strong> rows or extend signal validity.</small>
-                      </span>
-                    </label>
-                    <label className="policy-option">
-                      <input
-                        type="checkbox"
-                        checked={failOnMissingPrices}
-                        onChange={(event) => setFailOnMissingPrices(event.target.checked)}
-                        disabled={busy}
-                        aria-labelledby="portfolio-missing-prices-label"
-                        aria-describedby="portfolio-missing-prices-help"
-                      />
-                      <span className="policy-option__copy">
-                        <strong id="portfolio-missing-prices-label">Stop when a required asset has no price</strong>
-                        <small id="portfolio-missing-prices-help">Forward-fill needs at least one existing price. If the signal requires AAPL and XYZ but the valuation source has never contained a usable price for XYZ, there is nothing to carry forward. Enable this option to stop immediately and report XYZ. Leave it off to log the missing Asset and attempt the calculation without inventing a price; the run may still fail if it cannot produce a usable portfolio frame.</small>
-                      </span>
-                    </label>
-                  </div>
-                  <p className="policy-fieldset__note"><strong>Independent policies:</strong> forward-fill handles dates after an asset has a known price; strict missing-price validation catches assets with no usable price. You may enable either or both.</p>
+                  <legend>Valuation alignment</legend>
+                  <label className="policy-option">
+                    <input
+                      type="checkbox"
+                      checked={failOnMissingPrices}
+                      onChange={(event) => setFailOnMissingPrices(event.target.checked)}
+                      disabled={busy}
+                      aria-labelledby="portfolio-missing-prices-label"
+                      aria-describedby="portfolio-missing-prices-help"
+                    />
+                    <span className="policy-option__copy">
+                      <strong id="portfolio-missing-prices-label">Stop when a required asset has no price</strong>
+                      <small id="portfolio-missing-prices-help">An asset is required when the portfolio holds it, enters it, or exits it. If it has no price at or before a valuation timestamp within the maximum staleness, the run stops and reports it. Leave this off to attempt the valuation without that price; no price is invented, and the run may still fail if no usable valuation remains.</small>
+                    </span>
+                  </label>
+                  <p className="policy-fieldset__note"><strong>Bounded alignment:</strong> valuation uses the latest price at or before each real portfolio timestamp, no older than the maximum staleness. It never creates timestamps, extends the portfolio to the current time, or changes signal validity.</p>
                 </fieldset>
               </section>
 
@@ -1137,7 +1320,7 @@ export function PortfoliosPage({
                 <label className="checkbox-field"><input type="checkbox" checked={scheduled} onChange={(event) => setScheduled(event.target.checked)} disabled={busy} />Include in the shared portfolio Job&apos;s daily scheduled run</label>
               </section>
               {dependenciesError ? <p className="form-error" role="alert">{dependenciesError}</p> : null}
-              <aside className="workflow-guidance" aria-label="Portfolio calculation notes"><Info aria-hidden="true" size={18} /><p>Phase 1 uses a persistent daily <strong>InterpolatedPrices</strong> dependency with forward-fill interpolation for source-bar gaps, then applies observed weights through <strong>ImmediateSignal</strong>. Signal timestamps record observation time and do not guarantee exact economic effective time.</p></aside>
+              <aside className="workflow-guidance" aria-label="Portfolio calculation notes"><Info aria-hidden="true" size={18} /><p>Valuation uses a persistent daily <strong>InterpolatedPrices</strong> dependency with forward-fill interpolation for source-bar gaps. The selected Rebalance Configuration executes the latest observed weights through <strong>CalendarEventSignal</strong> at its session events. Signal timestamps record observation time and do not guarantee exact economic effective time.</p></aside>
               <div className="form-actions"><button className="button button--primary" type="submit" disabled={!canSubmit}>{editingPortfolio ? "Save changes" : "Create portfolio"}</button><button className="button button--secondary" type="button" onClick={() => { resetPortfolioForm(); setPortfolioFormOpen(false); }} disabled={busy}>Cancel</button></div>
             </form>
           </ApplicationCard>
@@ -1147,8 +1330,8 @@ export function PortfoliosPage({
           <ApplicationCard header={<h2>{editingRebalance ? "Edit rebalance configuration" : "Create rebalance configuration"}</h2>}>
             <form className="workflow-form" onSubmit={submitRebalance}>
               <div className="form-grid">
-                <label className="field">Name<input value={rebalanceName} onChange={(event) => setRebalanceName(event.target.value)} placeholder="Immediate observed weights" disabled={busy} /></label>
-                <label className="field field--wide">Description <span>Optional</span><textarea rows={2} value={rebalanceDescription} onChange={(event) => setRebalanceDescription(event.target.value)} disabled={busy} /></label>
+                <label className="field">Name<input value={rebalanceDraft.name} onChange={(event) => updateRebalanceDraft({ name: event.target.value })} placeholder="NYSE close" disabled={busy} /></label>
+                <label className="field field--wide">Description <span>Optional</span><textarea rows={2} value={rebalanceDraft.description} onChange={(event) => updateRebalanceDraft({ description: event.target.value })} disabled={busy} /></label>
                 <div className="field resource-picker-field">
                   <label id="rebalance-strategy-label">Strategy</label>
                   <ResourcePicker
@@ -1157,15 +1340,72 @@ export function PortfoliosPage({
                     emptyMessage="No rebalance strategies are available."
                     fullWidth
                     mode="single"
-                    onValueChange={(value) => setRebalanceStrategy(value as PortfolioRebalanceStrategy)}
+                    onValueChange={(value) => updateRebalanceDraft({ strategy: value as PortfolioRebalanceStrategy })}
                     options={REBALANCE_STRATEGY_OPTIONS}
                     placeholder="Select a rebalance strategy"
-                    value={rebalanceStrategy}
+                    value={rebalanceDraft.strategy}
                   />
                 </div>
+                <div className="field">
+                  <label htmlFor="rebalance-calendar">Calendar</label>
+                  <input
+                    id="rebalance-calendar"
+                    readOnly
+                    value={formatRebalanceCalendar({ calendar_identifier: rebalanceDraft.calendarIdentifier, session_label: rebalanceDraft.sessionLabel })}
+                    aria-describedby="rebalance-calendar-help"
+                  />
+                  <small id="rebalance-calendar-help" className="field-help">
+                    {isUsEquityCalendar({ calendar_identifier: rebalanceDraft.calendarIdentifier, session_label: rebalanceDraft.sessionLabel })
+                      ? "Alpaca trades US equities, so events come from the persisted NYSE calendar's regular sessions, including actual early closes."
+                      : "This configuration's calendar was set outside this application; saving keeps it."}
+                  </small>
+                </div>
+                <label className="field">Market event
+                  <select value={rebalanceDraft.event} onChange={(event) => updateRebalanceDraft({ event: event.target.value as PortfolioRebalanceEvent })} disabled={busy}>
+                    <option value="market_close">Market close</option>
+                    <option value="market_open">Market open</option>
+                  </select>
+                </label>
+                <div className="field">
+                  <label htmlFor="rebalance-event-offset">Event offset (seconds)</label>
+                  <div className="field-input-with-unit">
+                    <input
+                      id="rebalance-event-offset"
+                      type="number"
+                      step={1}
+                      value={rebalanceDraft.offsetSeconds}
+                      onChange={(event) => updateRebalanceDraft({ offsetSeconds: event.target.value })}
+                      disabled={busy}
+                      aria-describedby="rebalance-event-offset-help"
+                      aria-invalid={!rebalanceSchedule}
+                    />
+                    <span className="field-input-with-unit__unit" aria-hidden="true">s</span>
+                  </div>
+                  <small id="rebalance-event-offset-help" className="field-help">0 is the actual exchange event time. Negative values rebalance before it and positive values after it; -900 is 15 minutes before.</small>
+                </div>
+                <label className="field">Cadence
+                  <select value={rebalanceDraft.cadence} onChange={(event) => updateRebalanceDraft({ cadence: event.target.value as PortfolioRebalanceCadence })} disabled={busy}>
+                    <option value="every_session">Every session</option>
+                    <option value="weekly">Weekly</option>
+                  </select>
+                </label>
+                {rebalanceDraft.cadence === "weekly" ? (
+                  <div className="field">
+                    <label htmlFor="rebalance-weekday">Weekday</label>
+                    <select id="rebalance-weekday" value={rebalanceDraft.weekday} onChange={(event) => updateRebalanceDraft({ weekday: Number(event.target.value) })} disabled={busy} aria-describedby="rebalance-weekday-help">
+                      {rebalanceWeekdayOptions.map((weekday) => <option key={weekday} value={weekday}>{formatWeekday(weekday)}</option>)}
+                    </select>
+                    <small id="rebalance-weekday-help" className="field-help">Only sessions on this calendar-local weekday rebalance; a week whose session that day is a holiday has none.</small>
+                  </div>
+                ) : null}
               </div>
-              <div className="workflow-guidance"><Info aria-hidden="true" size={18} /><p>ImmediateSignal applies every observed signal weight frame immediately in the analytical backtest. It does not model execution delay, partial fills, volume participation, market impact, or slippage beyond the portfolio commission fee.</p></div>
-              <div className="form-actions"><button className="button button--primary" type="submit" disabled={!rebalanceName.trim() || busy}>{editingRebalance ? "Save changes" : "Create configuration"}</button><button className="button button--secondary" type="button" onClick={() => setRebalanceFormOpen(false)} disabled={busy}>Cancel</button></div>
+              {rebalanceSchedule ? (
+                <p className="form-note" role="status">{describeRebalanceSchedule(rebalanceSchedule)}</p>
+              ) : (
+                <p className="form-error" role="alert">Enter the event offset as a whole number of seconds.</p>
+              )}
+              <div className="workflow-guidance"><Info aria-hidden="true" size={18} /><p>CalendarEventSignal executes, at each selected session event, the latest ETF weights observed at or before it. A signal observed after the event first becomes eligible at the next one. It does not model execution delay, partial fills, volume participation, market impact, or slippage beyond the portfolio commission fee.</p></div>
+              <div className="form-actions"><button className="button button--primary" type="submit" disabled={!rebalanceRequest || busy}>{editingRebalance ? "Save changes" : "Create configuration"}</button><button className="button button--secondary" type="button" onClick={() => setRebalanceFormOpen(false)} disabled={busy}>Cancel</button></div>
             </form>
           </ApplicationCard>
         ) : null}

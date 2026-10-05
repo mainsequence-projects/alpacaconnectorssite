@@ -278,12 +278,19 @@ let signalJobs = [
     updated_at: "2026-01-01T00:00:00Z",
   },
 ];
+// Calendar-event rebalance policies (connector ADR 0009); calendar_event_signal is the only strategy.
 let portfolioRebalanceConfigurations = [
   {
-    uid: "rebalance-immediate",
-    name: "Immediate observed weights",
-    description: "Apply every observed ETF weight frame immediately.",
-    strategy: "immediate_signal",
+    uid: "rebalance-nyse-close",
+    name: "NYSE close",
+    description: "Use the latest observed ETF weight frame at each NYSE close.",
+    strategy: "calendar_event_signal",
+    calendar_identifier: "NYSE",
+    session_label: "regular",
+    rebalance_event: "market_close",
+    event_offset_seconds: 0,
+    rebalance_cadence: "every_session",
+    rebalance_weekday: 0,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   },
@@ -296,16 +303,15 @@ let portfolioConfigurations = [
     signal_configuration_uid: "signal-existing",
     signal_uid: "signal-universe-ivv",
     bars_configuration_uid: "bars-existing",
-    rebalance_configuration_uid: "rebalance-immediate",
-    rebalance_strategy: "immediate_signal",
+    rebalance_configuration_uid: "rebalance-nyse-close",
+    rebalance_strategy: "calendar_event_signal",
     portfolio_uid: "portfolio-existing",
     scheduled: true,
     job_uid: portfolioJob.uid,
     upsample_frequency_id: "1d",
     intraday_bar_interpolation_rule: "ffill",
     valuation_column: "close",
-    portfolio_prices_frequency: "1d",
-    forward_fill_to_now: false,
+    valuation_maximum_staleness_seconds: 86400,
     fail_on_missing_prices: true,
     commission_fee: 0.00018,
     job: portfolioJob,
@@ -315,6 +321,105 @@ let portfolioConfigurations = [
     updated_at: "2026-01-03T15:00:00Z",
   },
 ];
+
+// The API's portfolio and rebalance request models forbid unknown fields (`extra="forbid"`), so a
+// retired field such as `forward_fill_to_now` or `portfolio_prices_frequency` is a 422. These
+// checks mirror those models and their defaults; 422 bodies never echo the submitted input.
+const PORTFOLIO_REQUEST_DEFAULTS = {
+  description: null,
+  upsample_frequency_id: "1d",
+  intraday_bar_interpolation_rule: "ffill",
+  valuation_column: "close",
+  valuation_maximum_staleness_seconds: 86400,
+  fail_on_missing_prices: true,
+  commission_fee: 0.00018,
+  scheduled: true,
+};
+const PORTFOLIO_REQUEST_REQUIRED = ["name", "signal_configuration_uid", "bars_configuration_uid", "rebalance_configuration_uid"];
+const REBALANCE_REQUEST_DEFAULTS = {
+  description: null,
+  strategy: "calendar_event_signal",
+  calendar_identifier: "NYSE",
+  session_label: "regular",
+  rebalance_event: "market_close",
+  event_offset_seconds: 0,
+  rebalance_cadence: "every_session",
+  rebalance_weekday: 0,
+};
+const isText = (value) => typeof value === "string" && value.trim().length > 0;
+const PORTFOLIO_FIELD_CHECKS = {
+  name: [isText, "String should have at least 1 character"],
+  description: [(value) => value === null || typeof value === "string", "Input should be a valid string"],
+  signal_configuration_uid: [isText, "String should have at least 1 character"],
+  bars_configuration_uid: [isText, "String should have at least 1 character"],
+  rebalance_configuration_uid: [isText, "String should have at least 1 character"],
+  upsample_frequency_id: [(value) => value === "1d", "Input should be '1d'"],
+  intraday_bar_interpolation_rule: [(value) => value === "ffill", "Input should be 'ffill'"],
+  valuation_column: [isText, "String should have at least 1 character"],
+  valuation_maximum_staleness_seconds: [(value) => Number.isInteger(value) && value > 0, "Input should be an integer greater than 0"],
+  fail_on_missing_prices: [(value) => typeof value === "boolean", "Input should be a valid boolean"],
+  commission_fee: [(value) => typeof value === "number" && value >= 0, "Input should be greater than or equal to 0"],
+  scheduled: [(value) => typeof value === "boolean", "Input should be a valid boolean"],
+};
+const REBALANCE_FIELD_CHECKS = {
+  name: [isText, "String should have at least 1 character"],
+  description: [(value) => value === null || typeof value === "string", "Input should be a valid string"],
+  strategy: [(value) => value === "calendar_event_signal", "Input should be 'calendar_event_signal'"],
+  calendar_identifier: [isText, "String should have at least 1 character"],
+  session_label: [isText, "String should have at least 1 character"],
+  rebalance_event: [(value) => value === "market_open" || value === "market_close", "Input should be 'market_open' or 'market_close'"],
+  event_offset_seconds: [Number.isInteger, "Input should be a valid integer"],
+  rebalance_cadence: [(value) => value === "every_session" || value === "weekly", "Input should be 'every_session' or 'weekly'"],
+  rebalance_weekday: [(value) => Number.isInteger(value) && value >= 0 && value <= 6, "Input should be an integer from 0 to 6"],
+};
+
+function requestModelErrors(body, { checks, required, partial, label }) {
+  const errors = [];
+  for (const key of Object.keys(body)) {
+    if (!(key in checks)) {
+      errors.push({ loc: ["body", key], msg: "Extra inputs are not permitted", type: "extra_forbidden" });
+    } else if (!checks[key][0](body[key])) {
+      errors.push({ loc: ["body", key], msg: checks[key][1], type: "value_error" });
+    }
+  }
+  if (!partial) {
+    for (const key of required) {
+      if (!(key in body)) errors.push({ loc: ["body", key], msg: "Field required", type: "missing" });
+    }
+  } else if (Object.keys(body).length === 0) {
+    errors.push({ loc: ["body"], msg: `Value error, At least one ${label} field must be provided.`, type: "value_error" });
+  }
+  return errors;
+}
+
+function portfolioRequestErrors(body, { partial }) {
+  // The API rejects retired Job settings before it validates individual fields.
+  const retired = retiredJobSettingsErrors(body);
+  if (retired.length) return retired;
+  return requestModelErrors(body, {
+    checks: PORTFOLIO_FIELD_CHECKS,
+    required: PORTFOLIO_REQUEST_REQUIRED,
+    partial,
+    label: "portfolio configuration",
+  });
+}
+
+function rebalanceRequestErrors(body, { partial }) {
+  return requestModelErrors(body, {
+    checks: REBALANCE_FIELD_CHECKS,
+    required: ["name"],
+    partial,
+    label: "rebalance configuration",
+  });
+}
+
+// The detail's linked_rebalance projection: the rebalance policy without its identity or timestamps.
+function linkedRebalance(rebalanceConfigurationUid) {
+  const rebalance = portfolioRebalanceConfigurations.find((candidate) => candidate.uid === rebalanceConfigurationUid);
+  if (!rebalance) return null;
+  const { uid: _uid, created_at: _createdAt, updated_at: _updatedAt, ...linked } = rebalance;
+  return linked;
+}
 
 function portfolioConfigurationDetail(configuration) {
   const materialized = configuration.portfolio_uid !== null;
@@ -371,7 +476,7 @@ function portfolioConfigurationDetail(configuration) {
       feed: "sip",
       adjustment: "all",
     },
-    linked_rebalance: portfolioRebalanceConfigurations[0],
+    linked_rebalance: linkedRebalance(configuration.rebalance_configuration_uid),
     canonical_portfolio: {
       materialized,
       description: configuration.description,
@@ -1581,31 +1686,34 @@ createServer(async (request, response) => {
   }
   if (request.method === "POST" && url.pathname === "/v1/portfolio-configurations") {
     const body = await readJson(request);
-    const errors = retiredJobSettingsErrors(body);
+    const errors = portfolioRequestErrors(body, { partial: false });
     if (errors.length) return sendJson(response, 422, { detail: errors });
     const now = new Date().toISOString();
     const ordinal = portfolioConfigurations.length + 1;
-    const signal = signalJobs.find((candidate) => candidate.uid === body.signal_configuration_uid);
-    const rebalance = portfolioRebalanceConfigurations.find((candidate) => candidate.uid === body.rebalance_configuration_uid);
+    const values = { ...PORTFOLIO_REQUEST_DEFAULTS, ...body };
+    const signal = signalJobs.find((candidate) => candidate.uid === values.signal_configuration_uid);
+    const rebalance = portfolioRebalanceConfigurations.find((candidate) => candidate.uid === values.rebalance_configuration_uid);
+    if (!signal || !rebalance) {
+      return sendJson(response, 404, { detail: "Signal or rebalance configuration not found." });
+    }
     const created = {
       uid: `portfolio-config-${ordinal}`,
-      name: body.name,
-      description: body.description,
-      signal_configuration_uid: body.signal_configuration_uid,
-      signal_uid: signal?.signal_uid ?? "signal-unresolved",
-      bars_configuration_uid: body.bars_configuration_uid,
-      rebalance_configuration_uid: body.rebalance_configuration_uid,
-      rebalance_strategy: rebalance?.strategy ?? "immediate_signal",
+      name: values.name,
+      description: values.description,
+      signal_configuration_uid: values.signal_configuration_uid,
+      signal_uid: signal.signal_uid,
+      bars_configuration_uid: values.bars_configuration_uid,
+      rebalance_configuration_uid: values.rebalance_configuration_uid,
+      rebalance_strategy: rebalance.strategy,
       portfolio_uid: null,
-      scheduled: body.scheduled ?? true,
+      scheduled: values.scheduled,
       job_uid: portfolioJob.uid,
-      upsample_frequency_id: body.upsample_frequency_id,
-      intraday_bar_interpolation_rule: body.intraday_bar_interpolation_rule,
-      valuation_column: body.valuation_column,
-      portfolio_prices_frequency: body.portfolio_prices_frequency,
-      forward_fill_to_now: body.forward_fill_to_now,
-      fail_on_missing_prices: body.fail_on_missing_prices,
-      commission_fee: body.commission_fee,
+      upsample_frequency_id: values.upsample_frequency_id,
+      intraday_bar_interpolation_rule: values.intraday_bar_interpolation_rule,
+      valuation_column: values.valuation_column,
+      valuation_maximum_staleness_seconds: values.valuation_maximum_staleness_seconds,
+      fail_on_missing_prices: values.fail_on_missing_prices,
+      commission_fee: values.commission_fee,
       job: portfolioJob,
       latest_run_status: null,
       latest_run_at: null,
@@ -1644,11 +1752,16 @@ createServer(async (request, response) => {
     if (request.method === "GET") return sendJson(response, 200, portfolioConfigurationDetail(portfolioConfigurations[index]));
     if (request.method === "PATCH") {
       const body = await readJson(request);
-      const errors = retiredJobSettingsErrors(body);
+      const errors = portfolioRequestErrors(body, { partial: true });
       if (errors.length) return sendJson(response, 422, { detail: errors });
+      const rebalance = portfolioRebalanceConfigurations.find((candidate) => (
+        candidate.uid === (body.rebalance_configuration_uid ?? portfolioConfigurations[index].rebalance_configuration_uid)
+      ));
+      if (!rebalance) return sendJson(response, 404, { detail: "Rebalance configuration not found." });
       portfolioConfigurations[index] = {
         ...portfolioConfigurations[index],
         ...body,
+        rebalance_strategy: rebalance.strategy,
         updated_at: new Date().toISOString(),
       };
       return sendJson(response, 200, portfolioConfigurations[index]);
@@ -1671,16 +1784,20 @@ createServer(async (request, response) => {
         item_label: "rebalance configuration",
         identity: { fields: ["uid"] },
       },
+      // The API's discovery verbatim, including its calendar-event columns.
       list: {
         controls: {
-          search: { placeholder: "Search Rebalance Configurations", fields: ["name", "description"] },
+          search: { placeholder: "Search rebalance configurations", fields: ["name", "description"] },
           filters: [],
           ordering: ["name", "updated_at"],
         },
         columns: [
-          { id: "name", header: "Configuration", value_path: "name", data_type: "text", default_visible: true, hideable: false, sortable_key: "name" },
+          { id: "name", header: "Configuration", value_path: "name", data_type: "text", default_visible: true, hideable: false },
           { id: "strategy", header: "Strategy", value_path: "strategy", data_type: "text", default_visible: true, hideable: true },
-          { id: "updated-at", header: "Updated", value_path: "updated_at", data_type: "datetime", default_visible: true, hideable: true, sortable_key: "updated_at" },
+          { id: "calendar-identifier", header: "Calendar", value_path: "calendar_identifier", data_type: "text", default_visible: true, hideable: true },
+          { id: "rebalance-event", header: "Market Event", value_path: "rebalance_event", data_type: "text", default_visible: true, hideable: true },
+          { id: "rebalance-cadence", header: "Cadence", value_path: "rebalance_cadence", data_type: "text", default_visible: true, hideable: true },
+          { id: "updated-at", header: "Updated", value_path: "updated_at", data_type: "datetime", default_visible: true, hideable: true },
         ],
       },
       bulk_actions: [],
@@ -1706,9 +1823,12 @@ createServer(async (request, response) => {
   }
   if (request.method === "POST" && url.pathname === "/v1/portfolio-rebalance-configurations") {
     const body = await readJson(request);
+    const errors = rebalanceRequestErrors(body, { partial: false });
+    if (errors.length) return sendJson(response, 422, { detail: errors });
     const now = new Date().toISOString();
     const created = {
       uid: `rebalance-${portfolioRebalanceConfigurations.length + 1}`,
+      ...REBALANCE_REQUEST_DEFAULTS,
       ...body,
       created_at: now,
       updated_at: now,
@@ -1724,6 +1844,8 @@ createServer(async (request, response) => {
     if (request.method === "GET") return sendJson(response, 200, portfolioRebalanceConfigurations[index]);
     if (request.method === "PATCH") {
       const body = await readJson(request);
+      const errors = rebalanceRequestErrors(body, { partial: true });
+      if (errors.length) return sendJson(response, 422, { detail: errors });
       portfolioRebalanceConfigurations[index] = {
         ...portfolioRebalanceConfigurations[index],
         ...body,

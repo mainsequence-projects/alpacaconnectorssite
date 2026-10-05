@@ -434,15 +434,49 @@ export interface SignalObservations {
   assets: SignalObservationAsset[];
 }
 
-export type PortfolioRebalanceStrategy = "immediate_signal";
+/**
+ * The connector's only rebalance strategy (connector ADR 0009): at each selected persisted
+ * calendar event it executes the latest signal observed at or before that event.
+ */
+export type PortfolioRebalanceStrategy = "calendar_event_signal";
+export type PortfolioRebalanceEvent = "market_open" | "market_close";
+export type PortfolioRebalanceCadence = "every_session" | "weekly";
 
-export interface PortfolioRebalanceConfiguration {
+/**
+ * Alpaca trades US equities, so new rebalance configurations use the calendar and session the
+ * connector documents and defaults to: the persisted NYSE calendar's regular session.
+ */
+export const US_EQUITY_REBALANCE_CALENDAR = {
+  calendar_identifier: "NYSE",
+  session_label: "regular",
+} as const;
+
+/** The calendar-event fields every rebalance configuration stores and the API round-trips. */
+export interface PortfolioRebalanceCalendarEvent {
+  calendar_identifier: string;
+  session_label: string;
+  rebalance_event: PortfolioRebalanceEvent;
+  /** Signed offset from the persisted session event; negative runs before it. */
+  event_offset_seconds: number;
+  rebalance_cadence: PortfolioRebalanceCadence;
+  /** Calendar-local weekday for weekly cadence; Monday is 0. */
+  rebalance_weekday: number;
+}
+
+export interface PortfolioRebalanceConfiguration extends PortfolioRebalanceCalendarEvent {
   uid: string;
   name: string;
   description: string | null;
   strategy: PortfolioRebalanceStrategy;
   created_at: string;
   updated_at: string;
+}
+
+/** Create body, also sent whole as the edit PATCH; the API rejects any other field. */
+export interface PortfolioRebalanceConfigurationWriteRequest extends PortfolioRebalanceCalendarEvent {
+  name: string;
+  description: string | null;
+  strategy: PortfolioRebalanceStrategy;
 }
 
 export interface PortfolioConfiguration {
@@ -461,8 +495,8 @@ export interface PortfolioConfiguration {
   upsample_frequency_id: "1d";
   intraday_bar_interpolation_rule: "ffill";
   valuation_column: string;
-  portfolio_prices_frequency: "1d" | null;
-  forward_fill_to_now: boolean;
+  /** Maximum age of a price selected at a real valuation timestamp; never extends timestamps. */
+  valuation_maximum_staleness_seconds: number;
   fail_on_missing_prices: boolean;
   commission_fee: number;
   job: ConfigurationJob | null;
@@ -496,7 +530,7 @@ export interface PortfolioLinkedBars {
   adjustment: string;
 }
 
-export interface PortfolioLinkedRebalance {
+export interface PortfolioLinkedRebalance extends PortfolioRebalanceCalendarEvent {
   name: string;
   description: string | null;
   strategy: PortfolioRebalanceStrategy;
@@ -559,6 +593,7 @@ export interface PortfolioConfigurationDetail extends PortfolioConfiguration {
   canonical_portfolio: CanonicalPortfolioDetail;
 }
 
+/** Create body, also sent whole as the edit PATCH; the API rejects any other field. */
 export interface PortfolioConfigurationWriteRequest {
   name: string;
   description: string | null;
@@ -568,8 +603,7 @@ export interface PortfolioConfigurationWriteRequest {
   upsample_frequency_id: "1d";
   intraday_bar_interpolation_rule: "ffill";
   valuation_column: string;
-  portfolio_prices_frequency: "1d" | null;
-  forward_fill_to_now: boolean;
+  valuation_maximum_staleness_seconds: number;
   fail_on_missing_prices: boolean;
   commission_fee: number;
   scheduled: boolean;

@@ -29,7 +29,7 @@ Configurations, and ETF Portfolios are grouped together under **Portfolios**:
 | Universes | Create explicit Asset Universe registrations and Run extraction, constituent registration, and membership refresh |
 | Bars | Create, inspect, edit, and delete stored Alpaca bars configurations |
 | ETF Weight Signals | Create, inspect, edit, run, pause or resume the scheduled run of, and delete signal configurations |
-| Rebalance Configurations | Create, inspect, edit, and delete reusable rebalance policies; Phase 1 offers ImmediateSignal |
+| Rebalance Configurations | Create, inspect, edit, and delete reusable CalendarEventSignal policies on the NYSE regular session |
 | ETF Portfolios | Create, inspect, edit, run, pause or resume the scheduled run of, and delete durable portfolio configurations |
 
 Holdings snapshots, market-data observations, and other repository capabilities are not implied to

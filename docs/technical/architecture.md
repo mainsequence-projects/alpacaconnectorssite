@@ -65,6 +65,14 @@ request failed** rather than a broader portfolio label.
 
 The ETF Portfolios page stores only calculation intent in the Portfolio Configuration: references
 to an existing Signal Configuration, Bars Configuration, and Rebalance Configuration plus the
-supported interpolation and portfolio parameters, and its `scheduled` flag. Schedule, compute,
-image, and deployment state belong to the shared portfolio Job that the connector declares in its
-workflow file; the signal and portfolio pages show that Job read-only and never write it.
+supported interpolation and valuation parameters (valuation column, maximum price staleness,
+missing-price policy, commission fee), and its `scheduled` flag. Schedule, compute, image, and
+deployment state belong to the shared portfolio Job that the connector declares in its workflow
+file; the signal and portfolio pages show that Job read-only and never write it.
+
+Rebalance Configurations own execution timing (connector ADR 0009): the `calendar_event_signal`
+strategy, calendar, session, market event, signed offset, cadence, and weekly weekday. New
+policies use `US_EQUITY_REBALANCE_CALENDAR` from `src/api.ts`, the NYSE `regular` session. The
+portfolio and rebalance forms build their bodies from the request types in `src/api.ts`, which
+mirror the connector's request models field for field; an edit sends the same whole body as
+`PATCH`.

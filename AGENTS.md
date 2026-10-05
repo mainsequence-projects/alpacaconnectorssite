@@ -30,6 +30,12 @@ This repository is the Command Center static-site application for the Alpaca Con
   workflow-declared Jobs run (connector ADR 0013). Forms send only `scheduled` (whether the shared
   Job's daily scheduled run includes the configuration), never schedule or compute settings; the
   details pages show the shared Job's schedule read-only. `account_uid` is runtime-only.
+- Rebalance configurations: `calendar_event_signal` policies (connector ADR 0009). New ones use the
+  NYSE calendar's `regular` session; the form sends every calendar-event field (market event,
+  signed offset in seconds, cadence, weekday). Portfolio forms send
+  `valuation_maximum_staleness_seconds` and never the retired `portfolio_prices_frequency` or
+  `forward_fill_to_now`; the connector rejects unknown fields with 422. Browser tests assert the
+  exact create and edit bodies.
 - Documentation: project-wide capability and configuration reference, plus workflow and technical
   guidance. Documentation is a footer application in the SDK navigation rail, not an application
   page or a custom link outside the rail.

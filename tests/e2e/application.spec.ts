@@ -747,8 +747,19 @@ test("loads resolved portfolio details and value history only after portfolio se
   await expect(page.getByText("Daily IVV observation", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("iShares Core S&P 500 ETF (IVV)", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Daily paper holdings", { exact: true }).first()).toBeVisible();
+  const construction = page.locator("details").filter({ hasText: "Portfolio construction" });
+  await expect(construction.getByText("CalendarEventSignal", { exact: true })).toBeVisible();
+  await expect(construction.getByText("NYSE · regular session", { exact: true })).toBeVisible();
+  await expect(construction.getByText("At market close", { exact: true })).toBeVisible();
+  await expect(construction.getByText("Every session", { exact: true })).toBeVisible();
+  await expect(page.getByText("ImmediateSignal", { exact: true })).toHaveCount(0);
+  const valuation = page.locator("details").filter({ hasText: "Valuation source" });
+  await valuation.locator("summary").click();
+  await expect(valuation.getByText("1 day (86400 seconds)", { exact: true })).toBeVisible();
+  await expect(page.getByText("Portfolio valuation cadence", { exact: true })).toHaveCount(0);
   await page.locator("details").filter({ hasText: "Execution and calendar" }).locator("summary").click();
   await expect(page.getByText("NYSE trading calendar · exchange_calendar", { exact: true })).toBeVisible();
+  await expect(page.getByText("Extend latest prices to now", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Portfolio UID", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Signal UID", { exact: true })).toHaveCount(0);
   await expect(page.getByText("portfolio-existing", { exact: true })).toHaveCount(0);
@@ -783,32 +794,26 @@ test("shows the shared portfolio Job schedule read-only and pauses through PATCH
 });
 
 test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration", async ({ page }) => {
-  let createPayload: Record<string, unknown> | null = null;
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (request.method() === "POST" && url.pathname === "/v1/portfolio-configurations") {
-      createPayload = request.postDataJSON() as Record<string, unknown>;
-    }
-  });
-
   await page.goto("/portfolios");
   await expect(page.getByRole("heading", { level: 1, name: "ETF Portfolios" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Create portfolio" })).toHaveCount(0);
-  await expect(page.getByRole("row", { name: /Daily IVV analytical portfolio/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Daily IVV analytical portfolio/ })).toContainText("CalendarEventSignal");
 
   await page.getByRole("button", { name: "Create portfolio", exact: true }).click();
   const form = page.locator("form.workflow-form");
   await expect(page.getByRole("heading", { name: "Create portfolio" })).toBeVisible();
   await expect(form.getByLabel("Environment")).toHaveCount(0);
   await expect(form.getByText("persistent daily InterpolatedPrices", { exact: false })).toBeVisible();
-  await expect(form.getByRole("checkbox", { name: "Extend latest valuation prices to now" })).toBeVisible();
-  await expect(form.getByText("does not write synthetic InterpolatedPrices rows", { exact: false })).toBeVisible();
-  await expect(form.getByText("the last price is $100 on January 1", { exact: false })).toBeVisible();
-  await expect(form.getByRole("checkbox", { name: "Stop when a required asset has no price" })).toBeVisible();
-  await expect(form.getByText("there is nothing to carry forward", { exact: false })).toBeVisible();
-  await expect(form.getByText("the run may still fail", { exact: false })).toBeVisible();
-  await expect(form.getByText("Independent policies:", { exact: false })).toBeVisible();
-  await expect(form.getByLabel("Portfolio calculation notes")).toBeVisible();
+  // The API rejects the retired price-extension and valuation-cadence fields, so the form has neither.
+  await expect(form.getByRole("checkbox", { name: "Extend latest valuation prices to now" })).toHaveCount(0);
+  await expect(form.getByText("Portfolio valuation cadence", { exact: false })).toHaveCount(0);
+  const stalenessInput = form.getByLabel("Maximum price staleness (seconds)");
+  await expect(stalenessInput).toHaveValue("86400");
+  await expect(form.getByText("A price may be up to 1 day old", { exact: false })).toBeVisible();
+  await expect(form.getByRole("checkbox", { name: "Stop when a required asset has no price" })).toBeChecked();
+  await expect(form.getByText("no price is invented", { exact: false })).toBeVisible();
+  await expect(form.getByText("It never creates timestamps", { exact: false })).toBeVisible();
+  await expect(form.getByLabel("Portfolio calculation notes")).toContainText("CalendarEventSignal");
   const commissionInput = form.getByLabel("Commission fee (%)");
   await expect(commissionInput).toHaveValue("0.018");
   await expect(form.getByText("0.018% is stored and submitted as 0.00018", { exact: false })).toBeVisible();
@@ -823,35 +828,52 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
   await form.getByRole("button", { name: "Alpaca Bars Configuration" }).click();
   await page.getByRole("option", { name: /Daily paper holdings/ }).click();
   await form.getByRole("button", { name: "Rebalance Configuration" }).click();
-  await page.getByRole("option", { name: /Immediate observed weights/ }).click();
+  await page.getByRole("option", { name: /NYSE close/ }).click();
   await commissionInput.fill("0.025");
+  await stalenessInput.fill("0");
+  await expect(form.getByText("Enter a whole number of seconds greater than zero", { exact: false })).toBeVisible();
+  await expect(form.getByRole("button", { name: "Create portfolio", exact: true })).toBeDisabled();
+  await stalenessInput.fill("172800");
+  await expect(form.getByText("A price may be up to 2 days old", { exact: false })).toBeVisible();
+  const createRequest = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/v1/portfolio-configurations");
   await form.getByRole("button", { name: "Create portfolio", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Created Daily observed IVV portfolio." })).toBeVisible();
 
-  expect(createPayload).not.toBeNull();
-  expect(createPayload).not.toHaveProperty("environment");
-  expect(createPayload).not.toHaveProperty("schedule_type");
-  expect(createPayload).not.toHaveProperty("job");
-  expect(createPayload).toMatchObject({
+  // Exactly PortfolioConfigurationCreateRequest (connector ADR 0009): no retired or unknown field.
+  const expectedPortfolio = {
+    name: "Daily observed IVV portfolio",
+    description: null,
     signal_configuration_uid: "signal-existing",
     bars_configuration_uid: "bars-existing",
-    rebalance_configuration_uid: "rebalance-immediate",
+    rebalance_configuration_uid: "rebalance-nyse-close",
     upsample_frequency_id: "1d",
     intraday_bar_interpolation_rule: "ffill",
+    valuation_column: "close",
+    valuation_maximum_staleness_seconds: 172800,
+    fail_on_missing_prices: true,
     commission_fee: 0.00025,
     scheduled: true,
-  });
+  };
+  expect((await createRequest).postDataJSON()).toEqual(expectedPortfolio);
+  await expect(page.getByRole("heading", { name: "Created Daily observed IVV portfolio." })).toBeVisible();
 
   let createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio/ });
-  await expect(createdRow).toContainText("ImmediateSignal");
+  await expect(createdRow).toContainText("CalendarEventSignal");
   await selectRowAction(page, createdRow, "Run now");
   await expect(page.getByRole("heading", { name: /Daily observed IVV portfolio: JobRun/ })).toBeVisible();
 
   createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio/ });
   await selectRowAction(page, createdRow, "Edit");
   await expect(page.getByRole("heading", { name: "Edit portfolio" })).toBeVisible();
+  await expect(page.getByLabel("Maximum price staleness (seconds)")).toHaveValue("172800");
   await page.getByLabel("Portfolio name").fill("Daily observed IVV portfolio updated");
+  await page.getByRole("checkbox", { name: "Stop when a required asset has no price" }).uncheck();
+  const updateRequest = page.waitForRequest((request) => request.method() === "PATCH" && new URL(request.url()).pathname === "/v1/portfolio-configurations/portfolio-config-2");
   await page.getByRole("button", { name: "Save changes" }).click();
+  expect((await updateRequest).postDataJSON()).toEqual({
+    ...expectedPortfolio,
+    name: "Daily observed IVV portfolio updated",
+    fail_on_missing_prices: false,
+  });
   await expect(page.getByRole("heading", { name: "Updated Daily observed IVV portfolio updated." })).toBeVisible();
 
   createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio updated/ });
@@ -862,34 +884,78 @@ test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration"
   await expect(createdRow).toHaveCount(0);
 });
 
-test("creates a reusable rebalance configuration from its own portfolio application", async ({ page }) => {
-  let createPayload: Record<string, unknown> | null = null;
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (request.method() === "POST" && url.pathname === "/v1/portfolio-rebalance-configurations") {
-      createPayload = request.postDataJSON() as Record<string, unknown>;
-    }
-  });
-
+test("creates and edits a calendar-event rebalance configuration from its own portfolio application", async ({ page }) => {
   await page.goto("/rebalance-configurations");
   await expect(page.getByRole("heading", { level: 1, name: "Rebalance Configurations" })).toBeVisible();
-  await expect(page.getByRole("row", { name: /Immediate observed weights/ })).toBeVisible();
+  const existingRow = page.getByRole("row", { name: /NYSE close/ });
+  await expect(existingRow).toContainText("CalendarEventSignal");
+  await expect(existingRow).toContainText("NYSE · regular session");
+  await expect(existingRow).toContainText("At market close");
+  await expect(existingRow).toContainText("Every session");
 
   await page.getByRole("button", { name: "Create rebalance configuration", exact: true }).click();
   const form = page.locator("form.workflow-form");
-  await form.getByLabel("Name").fill("Immediate ETF observations");
-  await form.getByLabel("Description Optional").fill("Apply each observed ETF weight frame immediately.");
-  await form.getByRole("button", { name: "Strategy" }).click();
-  await page.getByRole("option", { name: /Immediate Signal/ }).click();
+  await expect(form.getByRole("button", { name: "Strategy" })).toContainText("Calendar Event Signal");
+  await expect(form.getByLabel("Calendar", { exact: true })).toHaveValue("NYSE · regular session");
+  await expect(form.getByLabel("Calendar", { exact: true })).not.toBeEditable();
+  await expect(form.getByLabel("Market event")).toHaveValue("market_close");
+  await expect(form.getByLabel("Event offset (seconds)")).toHaveValue("0");
+  await expect(form.getByLabel("Cadence")).toHaveValue("every_session");
+  await expect(form.getByLabel("Weekday")).toHaveCount(0);
+  await expect(form.getByRole("status")).toHaveText("Rebalances at market close of every NYSE regular session.");
+
+  await form.getByLabel("Name").fill("Wednesday pre-close");
+  await form.getByLabel("Description Optional").fill("Rebalance weekly, fifteen minutes before the Wednesday close.");
+  await form.getByLabel("Event offset (seconds)").fill("-90.5");
+  await expect(form.getByRole("alert")).toHaveText("Enter the event offset as a whole number of seconds.");
+  await expect(form.getByRole("button", { name: "Create configuration", exact: true })).toBeDisabled();
+  await form.getByLabel("Event offset (seconds)").fill("-900");
+  await form.getByLabel("Cadence").selectOption("weekly");
+  const weekday = form.getByLabel("Weekday");
+  await expect(weekday.locator("option")).toHaveText(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]);
+  await weekday.selectOption({ label: "Wednesday" });
+  await expect(form.getByRole("status")).toHaveText("Rebalances 15 min before market close of each NYSE regular session that falls on a Wednesday.");
+  const createRequest = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/v1/portfolio-rebalance-configurations");
   await form.getByRole("button", { name: "Create configuration", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "Created Immediate ETF observations." })).toBeVisible();
-  expect(createPayload).toEqual({
-    name: "Immediate ETF observations",
-    description: "Apply each observed ETF weight frame immediately.",
-    strategy: "immediate_signal",
+  // Exactly PortfolioRebalanceConfigurationCreateRequest: calendar_event_signal on the NYSE regular session.
+  const expectedRebalance = {
+    name: "Wednesday pre-close",
+    description: "Rebalance weekly, fifteen minutes before the Wednesday close.",
+    strategy: "calendar_event_signal",
+    calendar_identifier: "NYSE",
+    session_label: "regular",
+    rebalance_event: "market_close",
+    event_offset_seconds: -900,
+    rebalance_cadence: "weekly",
+    rebalance_weekday: 2,
+  };
+  expect((await createRequest).postDataJSON()).toEqual(expectedRebalance);
+  await expect(page.getByRole("heading", { name: "Created Wednesday pre-close." })).toBeVisible();
+  const createdRow = page.getByRole("row", { name: /Wednesday pre-close/ });
+  await expect(createdRow).toContainText("CalendarEventSignal");
+  await expect(createdRow).toContainText("15 min before market close");
+  await expect(createdRow).toContainText("Weekly on Wednesday");
+
+  await createdRow.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Edit rebalance configuration" })).toBeVisible();
+  await expect(form.getByLabel("Event offset (seconds)")).toHaveValue("-900");
+  await expect(form.getByLabel("Weekday")).toHaveValue("2");
+  await form.getByLabel("Market event").selectOption("market_open");
+  await form.getByLabel("Event offset (seconds)").fill("1800");
+  await form.getByLabel("Cadence").selectOption("every_session");
+  const updateRequest = page.waitForRequest((request) => request.method() === "PATCH" && new URL(request.url()).pathname === "/v1/portfolio-rebalance-configurations/rebalance-2");
+  await form.getByRole("button", { name: "Save changes", exact: true }).click();
+  // The edit sends the whole body; an every-session policy stores the default weekday.
+  expect((await updateRequest).postDataJSON()).toEqual({
+    ...expectedRebalance,
+    rebalance_event: "market_open",
+    event_offset_seconds: 1800,
+    rebalance_cadence: "every_session",
+    rebalance_weekday: 0,
   });
-  await expect(page.getByRole("row", { name: /Immediate ETF observations/ })).toContainText("ImmediateSignal");
+  await expect(page.getByRole("heading", { name: "Updated Wednesday pre-close." })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Wednesday pre-close/ })).toContainText("30 min after market open");
 });
 
 test("shows rebalance request progress in a modal and labels failures accurately", async ({ page }) => {
@@ -897,6 +963,7 @@ test("shows rebalance request progress in a modal and labels failures accurately
   const requestGate = new Promise<void>((resolve) => {
     releaseRequest = resolve;
   });
+  let createPayload: unknown = null;
 
   await page.route("**/v1/portfolio-rebalance-configurations", async (route) => {
     if (route.request().method() !== "POST") {
@@ -904,6 +971,7 @@ test("shows rebalance request progress in a modal and labels failures accurately
       return;
     }
 
+    createPayload = route.request().postDataJSON();
     await requestGate;
     await route.fulfill({
       status: 503,
@@ -913,7 +981,7 @@ test("shows rebalance request progress in a modal and labels failures accurately
   });
 
   await page.goto("/rebalance-configurations");
-  await expect(page.getByRole("row", { name: /Immediate observed weights/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /NYSE close/ })).toBeVisible();
   await page.getByRole("button", { name: "Create rebalance configuration", exact: true }).click();
   const form = page.locator("form.workflow-form");
   await form.getByLabel("Name").fill("Delayed rebalance request");
@@ -922,7 +990,19 @@ test("shows rebalance request progress in a modal and labels failures accurately
   const progressDialog = page.getByRole("dialog", { name: "Creating rebalance configuration" });
   await expect(progressDialog).toBeVisible();
   await expect(progressDialog.locator("[data-cc-activity-indicator]")).toBeVisible();
-  await expect(page.getByRole("row", { name: /Immediate observed weights/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /NYSE close/ })).toBeVisible();
+  // An untouched form sends the connector's documented defaults explicitly.
+  expect(createPayload).toEqual({
+    name: "Delayed rebalance request",
+    description: null,
+    strategy: "calendar_event_signal",
+    calendar_identifier: "NYSE",
+    session_label: "regular",
+    rebalance_event: "market_close",
+    event_offset_seconds: 0,
+    rebalance_cadence: "every_session",
+    rebalance_weekday: 0,
+  });
 
   releaseRequest();
 

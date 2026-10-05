@@ -3,7 +3,7 @@
 The **Portfolios** navigation group contains three sibling applications:
 
 - **ETF Weight Signals** maintains the observed ETF-weight producers;
-- **Rebalance Configurations** maintains reusable rebalance policies; and
+- **Rebalance Configurations** maintains reusable calendar-event rebalance policies; and
 - **ETF Portfolios** composes those resources into analytical portfolios.
 
 The ETF Portfolios application opens directly on the portfolio list. Select **Create portfolio**
@@ -15,9 +15,32 @@ Each configuration composes:
 - one enabled Alpaca Bars Configuration;
 - one reusable Rebalance Configuration;
 - persistent daily `InterpolatedPrices` using forward-fill interpolation;
-- valuation, missing-price, and commission assumptions; and
+- the valuation column, maximum price staleness, missing-price policy, and commission fee; and
 - whether the shared portfolio Job's daily scheduled run includes it (**Include in the shared
   portfolio Job's daily scheduled run**, on by default).
+
+Create and **Save changes** send exactly the connector's portfolio request model (connector
+ADR 0009), for example:
+
+```json
+{
+  "name": "Daily observed IVV portfolio",
+  "description": null,
+  "signal_configuration_uid": "<signal configuration UID>",
+  "bars_configuration_uid": "<bars configuration UID>",
+  "rebalance_configuration_uid": "<rebalance configuration UID>",
+  "upsample_frequency_id": "1d",
+  "intraday_bar_interpolation_rule": "ffill",
+  "valuation_column": "close",
+  "valuation_maximum_staleness_seconds": 86400,
+  "fail_on_missing_prices": true,
+  "commission_fee": 0.00018,
+  "scheduled": true
+}
+```
+
+The connector rejects any other field with 422, including the retired `portfolio_prices_frequency`
+and `forward_fill_to_now`.
 
 The GUI does not expose an Environment selector. The CodeRepositoryBranch runtime resolves its
 Organization Environment. Each run selects its configuration with `--configuration-uid <uid>`.
@@ -39,36 +62,65 @@ whether the portfolio is included in the scheduled run. **Pause** and **Resume**
 connector has created the Job on the branch, the details page reports that the Job is not deployed
 yet.
 
-## Price availability policies
+## Valuation alignment
 
-The two price options are independent checkboxes because they control complementary behavior:
+Valuation uses the latest price at or before each real portfolio timestamp, a rebalance event or a
+valuation-source observation:
 
-- **Extend latest valuation prices to now** assumes each Asset's last known price remains unchanged
-  through the current UTC time. For example, if an Asset's last price is `$100` on January 1 and
-  the portfolio runs daily through September 1, the calculation uses `$100` for every daily
-  timestamp through September 1 unless a newer price exists. This alignment exists only in memory;
-  it does not write synthetic rows into persistent `InterpolatedPrices` storage and does not extend
-  signal validity.
-- **Stop when a required asset has no price** handles the case that forward-fill cannot solve.
-  Forward-fill needs at least one existing price. If a signal requires AAPL and XYZ but the
-  valuation source has never contained a usable price for XYZ, there is nothing to carry forward.
-  When enabled, the run stops immediately and reports XYZ. When disabled, it logs the missing Asset
-  and attempts the calculation without inventing a price; the run may still fail if it cannot
-  produce a usable portfolio frame.
+- **Maximum price staleness (seconds)** bounds how old that price may be. The default, `86400`, is
+  one day; the field shows the value as a duration and accepts whole seconds greater than zero.
+  Alignment never creates timestamps, extends the portfolio to the current time, or changes signal
+  validity, so there is no option to extend prices to now.
+- **Stop when a required asset has no price** (on by default) decides what happens when a required
+  asset, one the portfolio holds, enters, or exits, has no price within that bound. When enabled,
+  the run stops and reports the asset. When disabled, the valuation is attempted without that
+  price; no price is invented, and the run may still fail if no usable valuation remains.
 
-Enable either option independently or enable both. Forward-fill can cover later dates only after
-an Asset has a known price; it cannot manufacture the first usable observation. Strict
-missing-price validation therefore remains meaningful when forward-fill is enabled.
+Persistent `InterpolatedPrices` still forward-fills gaps in the source bars, and each asset carries
+the rebalance calendar, so daily valuation observations follow the configured exchange session.
 
-## Rebalance scope
+## Rebalance configurations
 
 Open **Rebalance Configurations** directly from the **Portfolios** navigation group to create,
-edit, or delete reusable policies. The strategy is selected with a picker so future strategies can
-extend the same form; Phase 1 offers only `ImmediateSignal`. Configuration names and descriptions
-remain user-defined. Each observed ETF weight frame is applied immediately in the analytical
-backtest.
+edit, or delete reusable policies. The only strategy is `CalendarEventSignal`: at each selected
+persisted calendar event it executes the latest ETF weights observed at or before that event. A
+signal observed after the event first becomes eligible at the next one, and early closes use their
+actual persisted close times.
 
-This is an observation-time reconstruction. ETF Weight Signal timestamps record when holdings were
+Alpaca trades US equities, so new policies use the persisted `NYSE` calendar's `regular` session;
+the form shows the calendar read-only. Editing a policy keeps the calendar it already stores. The
+form chooses:
+
+- **Market event**: market close (the default) or market open;
+- **Event offset (seconds)**: a whole number of seconds from the actual event; `0` is the event
+  itself, `-900` is 15 minutes before it, and `1800` is 30 minutes after it;
+- **Cadence**: every session (the default) or weekly; and
+- **Weekday**, for weekly cadence only: Monday through Friday. Only sessions on that weekday
+  rebalance, so a week whose session that day is a holiday has none. An every-session policy sends
+  the default weekday, `0`.
+
+A line under the fields describes the result, such as "Rebalances 15 min before market close of
+each NYSE regular session that falls on a Wednesday." Create and **Save changes** send every field
+of the connector's rebalance request model:
+
+```json
+{
+  "name": "Wednesday pre-close",
+  "description": null,
+  "strategy": "calendar_event_signal",
+  "calendar_identifier": "NYSE",
+  "session_label": "regular",
+  "rebalance_event": "market_close",
+  "event_offset_seconds": -900,
+  "rebalance_cadence": "weekly",
+  "rebalance_weekday": 2
+}
+```
+
+The list shows each policy's calendar, market event with its offset, and cadence; the portfolio
+form's picker summarizes the same timing.
+
+This is a calendar-executed reconstruction. ETF Weight Signal timestamps record when holdings were
 observed; they do not guarantee exact economic effective time. The backtest does not model
 execution latency, partial fills, volume participation, market impact, or slippage beyond the
 configured commission fee.
@@ -83,8 +135,9 @@ persistent interpolation storage. The portfolio run updates interpolation and ca
 ms-markets portfolio without rerunning the signal or raw-bars producers.
 
 Select a row to load its business-facing detail on demand. The detail resolves the linked Signal,
-Universe, Alpaca accounts, Bars scope and profile, Rebalance policy, the shared Job's settings, and
-canonical portfolio calendar without exposing their internal UIDs. It also queries up to the latest
+Universe, Alpaca accounts, Bars scope and profile, Rebalance policy with its calendar, event, and
+cadence, the maximum price staleness, the shared Job's settings, and the canonical portfolio
+calendar without exposing their internal UIDs. It also queries up to the latest
 2,500 canonical daily values and renders portfolio value and drawdown history. No observation query
 is made for portfolios that the user has not opened.
 

@@ -722,6 +722,8 @@ a {
 
 .field {
   display: grid;
+  /* Keep each control under its label when a neighbouring field in the row is taller. */
+  align-content: start;
   gap: 0.45rem;
   min-width: 0;
 }
@@ -803,6 +805,12 @@ a {
   border-color: var(--ring);
   outline: 2px solid var(--ring);
   outline-offset: 1px;
+}
+
+/* A fixed value shown for context, such as the rebalance calendar. */
+.field input[readonly] {
+  background: var(--muted);
+  color: var(--muted-foreground);
 }
 
 .form-actions {
