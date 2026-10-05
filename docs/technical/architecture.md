@@ -22,6 +22,9 @@ Bearer. In Vite development the browser therefore calls its own dev server, and 
 `Authorization: Bearer` with a token from `mainsequence auth token --json`. It reuses the token
 until a minute before it expires, asks again after the API answers 401, and answers 401 with the
 reason when the CLI has no session. The token never reaches the browser, a URL, a file, or a log.
+The proxy refuses, with 403, any request that does not come from this machine or that the
+browser marks as coming from another site (`Sec-Fetch-Site`, `Origin`), so no other site open
+in the developer's browser can use it.
 The CLI is `MAINSEQUENCE_CLI`, else `mainsequence` on `PATH`, and its session must be for the
 backend in the API's `MAINSEQUENCE_ENDPOINT`. End-to-end builds call their fixture API directly.
 

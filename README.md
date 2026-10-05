@@ -23,7 +23,9 @@ The browser calls the Vite dev server, whose proxy forwards `/v1/` and `/health`
 from `mainsequence auth token --json`, renewed before it expires. The token stays in the dev server
 process. The proxy uses the CLI named by `MAINSEQUENCE_CLI`, else `mainsequence` on `PATH`; set
 `MAINSEQUENCE_CLI` to the API checkout's `.venv/bin/mainsequence` when the CLI is not on `PATH`.
-Without a session, API requests answer 401 with the reason.
+Without a session, API requests answer 401 with the reason. The proxy serves only the page it
+serves itself, on this machine: requests from another site or computer get 403 and never carry
+the token.
 
 The direct API transport is deliberately limited to development and end-to-end builds. A normal
 production build requires the Command Center iframe bridge. Its FastAPI ResourceRelease UID is

@@ -1070,6 +1070,13 @@ test("authenticates local development API requests in the dev server, not the br
   for (const entry of requests) {
     expect(entry.authorization).toBe("Bearer synthetic-local-session-token");
   }
+
+  // Another site open in the same browser cannot make the proxy act with the developer's token.
+  for (const headers of [{ "Sec-Fetch-Site": "cross-site" }, { Origin: "https://elsewhere.example" }]) {
+    const refused = await request.get(`${devServerOrigin}/v1/project-state/configuration`, { headers });
+    expect(refused.status()).toBe(403);
+  }
+  expect((await fixtureRequestLog(request)).length).toBe(requests.length);
 });
 
 test("serves same-artifact documentation routes", async ({ page }) => {

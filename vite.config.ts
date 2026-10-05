@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import type { IncomingMessage } from "node:http";
 
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv, type Logger, type Plugin, type ProxyOptions } from "vite";
@@ -18,6 +19,31 @@ interface SessionToken {
 
 function isLocalApiPath(url: string | undefined): boolean {
   return LOCAL_API_PATHS.some((path) => url?.startsWith(path));
+}
+
+const LOOPBACK_IPV4 = /^127(?:\.\d{1,3}){3}$/;
+
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const ipv4 = address.startsWith("::ffff:") ? address.slice("::ffff:".length) : address;
+  return address === "::1" || LOOPBACK_IPV4.test(ipv4);
+}
+
+/**
+ * Whether the request comes from the page this development server serves. Browsers mark a request
+ * from any other site (`Sec-Fetch-Site`, `Origin`), so another site open in the developer's
+ * browser cannot make the proxy act with the developer's token.
+ */
+function isSameOriginRequest(request: IncomingMessage): boolean {
+  const site = request.headers["sec-fetch-site"];
+  if (typeof site === "string" && site !== "same-origin" && site !== "none") return false;
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === request.headers.host;
+  } catch {
+    return false;
+  }
 }
 
 /** The first line of the CLI's error output, such as "Not logged in."; it never prints a token there. */
@@ -117,7 +143,18 @@ function localApiSessionProxy(target: string): { plugin: Plugin; proxy: Record<s
       configureServer(server) {
         // Runs before Vite's proxy, which forwards the request with this header.
         server.middlewares.use(async (request, response, next) => {
-          if (!isLocalApiPath(request.url) || request.method === "OPTIONS") {
+          if (!isLocalApiPath(request.url)) {
+            next();
+            return;
+          }
+          if (!isLoopbackAddress(request.socket.remoteAddress) || !isSameOriginRequest(request)) {
+            response.statusCode = 403;
+            response.setHeader("Content-Type", "application/json");
+            response.setHeader("Cache-Control", "no-store");
+            response.end(JSON.stringify({ detail: "Only the page this development server serves, on this machine, can use the local API proxy." }));
+            return;
+          }
+          if (request.method === "OPTIONS") {
             next();
             return;
           }
