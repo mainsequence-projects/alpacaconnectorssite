@@ -19,16 +19,19 @@ import {
   ResourceStatusCell,
   type ResourceRowAction,
 } from "@dev-mainsequence/command-center-sdk/views";
-import { Landmark, ShieldCheck, WalletCards } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { KeyRound, Landmark, ShieldCheck, WalletCards } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   API_ENDPOINTS,
   ApiResponseError,
+  accountKeyRequestCancelPath,
   createApiClient,
   type Account,
   type AccountDeleteResponse,
   type AccountHolding,
+  type AccountKeyRequest,
+  type AccountKeyRequestCollection,
   type AccountRegistrationPreflightResponse,
   type AccountRegistrationRequest,
   type AccountUpdateRequest,
@@ -576,6 +579,78 @@ function AccountRegistrationReview({ plan }: { plan: AccountRegistrationPrefligh
   );
 }
 
+function environmentLabel(environment: AccountKeyRequest["environment"]): string {
+  return environment === "live" ? "live" : "paper";
+}
+
+function keyRequestTitle(request: AccountKeyRequest): string {
+  if (request.action === "rotate") {
+    return `Replace the keys of a registered ${environmentLabel(request.environment)} account`;
+  }
+  const named = request.account_name ? ` named “${request.account_name}”` : "";
+  return `Register a ${environmentLabel(request.environment)} account${named}`;
+}
+
+// The signed-in person's pending requests from the Alpaca Agent (connector ADR 0015). The Agent
+// never sees the keys: the person enters them here and the API completes the request.
+function PendingKeyRequests({
+  requests,
+  disabled,
+  onEnterKeys,
+  onDismiss,
+}: {
+  requests: readonly AccountKeyRequest[];
+  disabled: boolean;
+  onEnterKeys: (request: AccountKeyRequest) => void;
+  onDismiss: (request: AccountKeyRequest) => void;
+}) {
+  if (requests.length === 0) return null;
+  return (
+    <ApplicationCard
+      header={(
+        <div className="card-title-row">
+          <h2>Requested by your Alpaca Agent</h2>
+          <span className="status-pill status-pill--warning">{requests.length} pending</span>
+        </div>
+      )}
+    >
+      <p className="form-note">
+        Your Alpaca Agent asked you to enter Alpaca API keys. Enter them here, never in the
+        conversation; the API checks them with Alpaca and stores them as Main Sequence Secrets.
+      </p>
+      <ul className="key-request-list" aria-label="Pending key requests">
+        {requests.map((request) => (
+          <li className="key-request" key={request.uid}>
+            <KeyRound aria-hidden="true" size={18} />
+            <div className="key-request__summary">
+              <strong>{keyRequestTitle(request)}</strong>
+              <span className="form-note">Expires {formatSnapshotTime(request.expires_at)}</span>
+            </div>
+            <div className="form-actions">
+              <button
+                className="button button--primary"
+                type="button"
+                disabled={disabled}
+                onClick={() => onEnterKeys(request)}
+              >
+                Enter keys
+              </button>
+              <button
+                className="button button--secondary"
+                type="button"
+                disabled={disabled}
+                onClick={() => onDismiss(request)}
+              >
+                Dismiss
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </ApplicationCard>
+  );
+}
+
 export function AccountsPage({ transport }: { transport: ApiTransport }) {
   const api = useMemo(() => createApiClient(transport), [transport]);
   const [formOpen, setFormOpen] = useState(false);
@@ -602,6 +677,9 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deletePending, setDeletePending] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [keyRequests, setKeyRequests] = useState<AccountKeyRequest[]>([]);
+  // The Alpaca Agent request the open form completes; its environment and account are fixed.
+  const [activeKeyRequest, setActiveKeyRequest] = useState<AccountKeyRequest | null>(null);
 
   const reviewedPlan = !editing && preflight?.revision === inputRevision ? preflight.plan : null;
   const rotatingCredentials = editing !== null && Boolean(apiKey.trim() || secretKey.trim());
@@ -618,7 +696,12 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
   const hasAccountChanges = accountChanges !== null
     && (Object.keys(accountChanges).length > 0 || rotatingCredentials);
   const busy = mutation.state === "loading";
-  const canSubmit = !busy && inputError === null && (editing === null || hasAccountChanges);
+  // A rotation request is completed only by new keys.
+  const keyRequestNeedsKeys = activeKeyRequest?.action === "rotate" && !rotatingCredentials;
+  const canSubmit = !busy
+    && inputError === null
+    && !keyRequestNeedsKeys
+    && (editing === null || hasAccountChanges);
   const canRegister = editing === null
     && canSubmit
     && reviewedPlan !== null
@@ -626,7 +709,19 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
   const showCredentialError = credentialError !== null
     && (rotatingCredentials || Boolean(apiKey.trim() && secretKey.trim()));
 
+  useEffect(() => {
+    const controller = new AbortController();
+    api.get<AccountKeyRequestCollection>(API_ENDPOINTS.accountKeyRequests, controller.signal)
+      .then((result) => setKeyRequests(result.items))
+      // An API release without key requests, or a failed read, shows no pending requests.
+      .catch(() => {
+        if (!controller.signal.aborted) setKeyRequests([]);
+      });
+    return () => controller.abort();
+  }, [api, refreshKey]);
+
   function resetForm() {
+    setActiveKeyRequest(null);
     setEditing(null);
     setAccountName("");
     setEnvironment("paper");
@@ -666,6 +761,43 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function enterKeysForRequest(request: AccountKeyRequest) {
+    if (request.action === "register") {
+      beginRegistration();
+      setAccountName(request.account_name ?? "");
+      setEnvironment(request.environment);
+      setActiveKeyRequest(request);
+      return;
+    }
+    void beginRotationForRequest(request);
+  }
+
+  async function beginRotationForRequest(request: AccountKeyRequest) {
+    if (!request.account_uid) return;
+    setMutation({ state: "loading", label: "Loading the account" });
+    try {
+      const account = await api.get<Account>(
+        `${API_ENDPOINTS.accounts}/${encodeURIComponent(request.account_uid)}`,
+      );
+      beginEdit(account);
+      setActiveKeyRequest(request);
+    } catch (error) {
+      setMutation({ state: "error", message: formatError(error) });
+    }
+  }
+
+  async function dismissKeyRequest(request: AccountKeyRequest) {
+    setMutation({ state: "loading", label: "Dismissing the request" });
+    try {
+      await api.post<AccountKeyRequest>(accountKeyRequestCancelPath(request.uid), {});
+      if (activeKeyRequest?.uid === request.uid) closeForm();
+      setMutation({ state: "idle" });
+      setRefreshKey((current) => current + 1);
+    } catch (error) {
+      setMutation({ state: "error", message: formatError(error) });
+    }
+  }
+
   // A shown registration review describes the inputs it ran with; any change requires a new one.
   function changeInput(apply: () => void, { credentials = false } = {}) {
     apply();
@@ -676,9 +808,16 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
 
   function completeFormMutation(action: "Registered" | "Updated") {
     const completedName = accountName.trim();
+    const completedKeyRequest = activeKeyRequest !== null;
     resetForm();
     setFormOpen(false);
-    setMutation({ state: "success", message: `${action} ${completedName}.` });
+    setMutation({
+      state: "success",
+      message: `${action} ${completedName}.`,
+      details: completedKeyRequest
+        ? ["Your Alpaca Agent's request is complete; it can continue in the conversation."]
+        : [],
+    });
     setRefreshKey((current) => current + 1);
   }
 
@@ -699,6 +838,7 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
       account_name: accountName.trim(),
       environment,
       credentials: managedCredentials(apiKey, secretKey),
+      ...(activeKeyRequest ? { key_request_uid: activeKeyRequest.uid } : {}),
     };
   }
 
@@ -715,7 +855,11 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
     }
 
     const request: AccountUpdateRequest = rotatingCredentials
-      ? { ...accountChanges, credentials: managedCredentials(apiKey, secretKey) }
+      ? {
+        ...accountChanges,
+        credentials: managedCredentials(apiKey, secretKey),
+        ...(activeKeyRequest ? { key_request_uid: activeKeyRequest.uid } : {}),
+      }
       : { ...accountChanges };
     setCredentialsError(null);
     setMutation({
@@ -811,9 +955,24 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
           description="Register and maintain brokerage accounts with their Alpaca API keys. The API checks the keys with Alpaca and stores them as Main Sequence Secrets."
         />
 
+        {formOpen ? null : (
+          <PendingKeyRequests
+            requests={keyRequests}
+            disabled={busy}
+            onEnterKeys={enterKeysForRequest}
+            onDismiss={(request) => void dismissKeyRequest(request)}
+          />
+        )}
+
         {formOpen ? (
           <ApplicationCard header={<h2>{editing ? "Edit account registration" : "Register account"}</h2>}>
             <form className="workflow-form" onSubmit={submit}>
+            {activeKeyRequest ? (
+              <p className="form-note" role="note">
+                {keyRequestTitle(activeKeyRequest)}: this completes your Alpaca Agent&apos;s request,
+                which expires {formatSnapshotTime(activeKeyRequest.expires_at)}.
+              </p>
+            ) : null}
             <div className="form-grid">
               <label className="field">Account name
                 <input
@@ -830,12 +989,13 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
                     () => setEnvironment(event.target.value as "paper" | "live"),
                     { credentials: true },
                   )}
-                  disabled={busy || editing !== null}
+                  disabled={busy || editing !== null || activeKeyRequest !== null}
                 >
                   <option value="paper">Paper</option>
                   <option value="live">Live</option>
                 </select>
                 {editing ? <span>The environment is fixed after registration.</span> : null}
+                {!editing && activeKeyRequest ? <span>Set by your Alpaca Agent&apos;s request.</span> : null}
               </label>
               {editing ? null : (
                 <AlpacaCredentialFields
@@ -898,7 +1058,11 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
 
             {credentialsError ? <p className="form-error" role="alert">{credentialsError}</p> : null}
             {showCredentialError ? <p className="form-error" role="alert">{credentialError}</p> : null}
-            {editing && !hasAccountChanges ? (
+            {keyRequestNeedsKeys ? (
+              <p className="form-note" role="status">
+                Enter the new API key and secret key to complete your Alpaca Agent&apos;s request.
+              </p>
+            ) : editing && !hasAccountChanges ? (
               <p className="form-note" role="status">No changes to save.</p>
             ) : null}
             {reviewedPlan ? <AccountRegistrationReview plan={reviewedPlan} /> : null}

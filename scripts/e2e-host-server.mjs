@@ -114,6 +114,26 @@ let accounts = [
     buying_power: "50000",
   },
 ];
+// Account key requests the Alpaca Agent started for the signed-in person (connector ADR 0015).
+// Tests create them through the mock-only `POST /__key-requests`.
+let keyRequests = [];
+
+function pendingKeyRequest(uid, { action, environment, accountUid }) {
+  const request = keyRequests.find((item) => item.uid === uid && item.status === "pending");
+  if (!request) return { status: 404, detail: { code: "not_found", message: `Account key request ${uid} does not exist.` } };
+  if (request.action !== action || (environment && request.environment !== environment)
+    || (action === "rotate" && request.account_uid !== accountUid)) {
+    return { status: 409, detail: { code: "action_conflict", message: `Account key request ${uid} does not match.` } };
+  }
+  return { request };
+}
+
+function completeKeyRequest(request, accountUid) {
+  request.status = "completed";
+  request.account_uid = accountUid;
+  request.completed_at = new Date().toISOString();
+}
+
 const accountHoldings = {
   "account-paper": [
     {
@@ -754,6 +774,23 @@ createServer(async (request, response) => {
     return sendJson(response, 200, { requests: requestLog });
   }
   if (url.pathname === "/__requests") return sendJson(response, 200, { requests: requestLog });
+  if (url.pathname === "/__key-requests" && request.method === "POST") {
+    const body = await readJson(request);
+    const now = new Date();
+    const created = {
+      uid: `key-request-${keyRequests.length + 1}`,
+      action: body.action ?? "register",
+      account_name: body.account_name ?? null,
+      environment: body.environment ?? "paper",
+      account_uid: body.account_uid ?? null,
+      status: "pending",
+      created_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+      completed_at: null,
+    };
+    keyRequests.push(created);
+    return sendJson(response, 201, created);
+  }
 
   requestLog.push({
     path: url.pathname,
@@ -985,9 +1022,28 @@ createServer(async (request, response) => {
     });
   }
   const accountRegistrationFields = {
-    allowed: ["account_name", "environment", "credentials"],
+    allowed: ["account_name", "environment", "credentials", "key_request_uid"],
     required: ["credentials"],
   };
+  if (request.method === "GET" && url.pathname === "/v1/accounts/key-requests") {
+    const now = Date.now();
+    const items = keyRequests
+      .filter((item) => item.status === "pending" && Date.parse(item.expires_at) > now)
+      .reverse();
+    return sendJson(response, 200, { items });
+  }
+  const keyRequestCancelMatch = url.pathname.match(/^\/v1\/accounts\/key-requests\/([^/]+)\/actions\/cancel$/);
+  if (request.method === "POST" && keyRequestCancelMatch) {
+    const uid = decodeURIComponent(keyRequestCancelMatch[1]);
+    const found = keyRequests.find((item) => item.uid === uid);
+    if (!found) return sendJson(response, 404, { detail: { code: "not_found", message: "Not found." } });
+    if (found.status !== "pending") {
+      return sendJson(response, 409, { detail: { code: "action_conflict", message: `Account key request ${uid} is ${found.status}.` } });
+    }
+    found.status = "cancelled";
+    found.completed_at = new Date().toISOString();
+    return sendJson(response, 200, found);
+  }
   if (request.method === "POST" && url.pathname === "/v1/accounts/registration/preflight") {
     const body = await readJson(request);
     const errors = accountValidationErrors(body, accountRegistrationFields);
@@ -1018,6 +1074,12 @@ createServer(async (request, response) => {
     const body = await readJson(request);
     const errors = accountValidationErrors(body, accountRegistrationFields);
     if (errors.length) return sendJson(response, 422, { detail: errors });
+    let keyRequest = null;
+    if (body.key_request_uid) {
+      const checked = pendingKeyRequest(body.key_request_uid, { action: "register", environment: body.environment });
+      if (!checked.request) return sendJson(response, checked.status, { detail: checked.detail });
+      keyRequest = checked.request;
+    }
     const now = new Date().toISOString();
     const uid = `account-${accounts.length + 1}`;
     const uniqueIdentifier = `${uid.toUpperCase()}__ALPACA_${body.environment.toUpperCase()}`;
@@ -1042,6 +1104,7 @@ createServer(async (request, response) => {
       buying_power: "200000",
     };
     accounts.push(created);
+    if (keyRequest) completeKeyRequest(keyRequest, uid);
     return sendJson(response, 201, created);
   }
   const accountHoldingsDiscoveryMatch = url.pathname.match(
@@ -1101,10 +1164,21 @@ createServer(async (request, response) => {
     if (request.method === "PATCH") {
       const body = await readJson(request);
       const errors = accountValidationErrors(body, {
-        allowed: ["account_name", "account_is_active", "credentials"],
+        allowed: ["account_name", "account_is_active", "credentials", "key_request_uid"],
         required: [],
       });
       if (errors.length) return sendJson(response, 422, { detail: errors });
+      let keyRequest = null;
+      if (body.key_request_uid) {
+        if (!body.credentials) {
+          return sendJson(response, 422, {
+            detail: [{ loc: ["body"], msg: "Value error, A key request is completed only by submitting credentials.", type: "value_error" }],
+          });
+        }
+        const checked = pendingKeyRequest(body.key_request_uid, { action: "rotate", accountUid: uid });
+        if (!checked.request) return sendJson(response, checked.status, { detail: checked.detail });
+        keyRequest = checked.request;
+      }
       if (Object.keys(body).length === 0) {
         return sendJson(response, 422, {
           detail: [{
@@ -1114,7 +1188,7 @@ createServer(async (request, response) => {
           }],
         });
       }
-      const { credentials, ...changes } = body;
+      const { credentials, key_request_uid: _keyRequestUid, ...changes } = body;
       accounts[index] = { ...accounts[index], ...changes };
       if (credentials) {
         const uid = accounts[index].uid;
@@ -1128,6 +1202,7 @@ createServer(async (request, response) => {
           credentials_updated_by_user_uid: "user-e2e",
         };
       }
+      if (keyRequest) completeKeyRequest(keyRequest, uid);
       return sendJson(response, 200, accounts[index]);
     }
     if (request.method === "DELETE") {

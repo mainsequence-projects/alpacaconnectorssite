@@ -37,6 +37,20 @@ written; this rule cannot be disabled. The backend idempotently ensures the shar
 currency Asset before publishing cash holdings. Crypto pairs resolve by symbol because Alpaca's
 position UUID can differ from its canonical Asset catalog UUID.
 
+## Requests from the Alpaca Agent
+
+The Alpaca Agent never receives your keys. When you ask it to register an account or replace an
+account's keys, it starts a request for you and gives you the link to this application. The
+Accounts page then shows **Requested by your Alpaca Agent** with your own pending requests, each
+with what it is for and when it expires (one hour after the Agent started it).
+
+Select **Enter keys** to open the matching form. A registration request fixes the environment and
+fills in the account name; a key replacement opens that account's edit form and requires both new
+keys. Review and register, or save, as usual: the keys go only to the API, which completes the
+request, and the Agent can then continue in the conversation. **Dismiss** cancels a request you do
+not want. Only you can see or complete your requests, and nothing about a request is read from the
+address bar.
+
 ## Editing and rotating credentials
 
 The environment is immutable after registration. **Edit** changes the account name or active state

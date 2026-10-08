@@ -7,9 +7,11 @@ root. The reviewed declaration is
 The deployment is configured for Vite on Node.js 24, publishes `dist` with SPA fallback to
 `/index.html`, retains three revisions, and automatically redeploys every synchronized commit.
 
-Production API requests are delegated by the Command Center SDK to FastAPI ResourceRelease
-`0705a0b6-ec48-443b-835e-6c597a6b18f2`. The workflow provides that public UID through
-`VITE_FASTAPI_RESOURCE_RELEASE_UID`; the platform injects the reserved Command Center origin.
+Production API requests are delegated by the Command Center SDK to the connector's FastAPI
+ResourceRelease, the `alpaca` resource of the `alpaca-connectors` repository. The workflow names it
+by repository and key in `build_environment`, and the platform resolves its public UID into
+`VITE_FASTAPI_RESOURCE_RELEASE_UID` at every build; when the connector recreates that release, the
+platform rebuilds this site. The platform injects the reserved Command Center origin.
 No credential is included in the browser build.
 
 The same workflow owns the enabled **Alpaca Connectors** Command Center link for the deployment

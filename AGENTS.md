@@ -25,6 +25,13 @@ This repository is the Command Center static-site application for the Alpaca Con
   and secret key; the API validates them and stores them as application-managed Main Sequence
   Secrets (connector ADR 0011). Keep the values in component state only, clear them after use, and
   never put them in a URL, browser storage, persisted view state, or logs.
+- Agent key requests: the Accounts page lists the signed-in person's pending requests from the
+  Alpaca Agent (`GET /v1/accounts/key-requests`, connector ADR 0015). Enter keys opens the
+  registration or rotation form with the request's settings fixed and sends its `key_request_uid`
+  with the keys; Dismiss cancels it. Command Center passes nothing from its URL into the site, so a
+  request is never read from the URL.
+- The workflow names the API release by repository and key (`alpaca-connectors` / `alpaca`) in
+  `build_environment`, never by a pinned UID.
 - Universes: account-independent ETF holdings sources; Run asks for an Alpaca account only as
   execution context when it registers newly discovered constituents.
 - Bars: create, list, edit, and delete stored Alpaca bar configurations using registered accounts,

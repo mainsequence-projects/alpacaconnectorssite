@@ -366,6 +366,76 @@ test("loads only the selected account's latest holdings after row activation", a
   await expect(page.getByRole("row", { name: /Paper account/ })).toBeVisible();
 });
 
+test("completes the Alpaca Agent's key requests on the Accounts page", async ({ page, request }) => {
+  const { requestUrls, accountWrites } = trackAccountTraffic(page);
+  async function startKeyRequest(data: Record<string, string>) {
+    return (await (await request.post(`${E2E_API_ORIGIN}/__key-requests`, { data })).json()) as { uid: string };
+  }
+  const registration = await startKeyRequest({
+    action: "register",
+    environment: "live",
+    account_name: "Agent live account",
+  });
+  const unwanted = await startKeyRequest({ action: "register", environment: "paper", account_name: "Not needed" });
+  const rotation = await startKeyRequest({ action: "rotate", environment: "paper", account_uid: "account-paper" });
+
+  await page.goto("/accounts");
+  await expect(page.getByRole("heading", { name: "Requested by your Alpaca Agent" })).toBeVisible();
+  const pending = page.getByRole("list", { name: "Pending key requests" }).getByRole("listitem");
+  await expect(pending).toHaveCount(3);
+  await expect(pending.filter({ hasText: "Register a live account named \u201cAgent live account\u201d" })).toHaveCount(1);
+  await expect(pending.filter({ hasText: "Replace the keys of a registered paper account" })).toHaveCount(1);
+
+  await pending.filter({ hasText: "Not needed" }).getByRole("button", { name: "Dismiss" }).click();
+  await expect(pending).toHaveCount(2);
+
+  await pending.filter({ hasText: "Agent live account" }).getByRole("button", { name: "Enter keys" }).click();
+  const form = page.locator("form.workflow-form");
+  await expect(form.getByText("this completes your Alpaca Agent's request")).toBeVisible();
+  await expect(form.getByLabel("Account name")).toHaveValue("Agent live account");
+  await expect(form.getByLabel("Environment")).toHaveValue("live");
+  await expect(form.getByLabel("Environment")).toBeDisabled();
+  await form.getByLabel("API key", { exact: true }).fill(LIVE_API_KEY);
+  await form.getByLabel("Secret key", { exact: true }).fill(LIVE_SECRET_KEY);
+  await form.getByRole("button", { name: "Review registration" }).click();
+  await expect(form.getByRole("region", { name: "Registration review" })).toBeVisible();
+  await form.getByRole("button", { name: "Register account" }).click();
+  await expect(page.getByRole("heading", { name: "Registered Agent live account." })).toBeVisible();
+  await expect(page.getByText("Your Alpaca Agent's request is complete")).toBeVisible();
+
+  await expect(pending).toHaveCount(1);
+  await pending.getByRole("button", { name: "Enter keys" }).click();
+  const save = form.getByRole("button", { name: "Save changes" });
+  await expect(form.getByText("Enter the new API key and secret key to complete")).toBeVisible();
+  await expect(save).toBeDisabled();
+  await form.getByLabel("New API key").fill(ROTATED_API_KEY);
+  await form.getByLabel("New secret key").fill(ROTATED_SECRET_KEY);
+  await save.click();
+  await expect(page.getByRole("heading", { name: /^Updated .+\.$/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Requested by your Alpaca Agent" })).toHaveCount(0);
+
+  const registrationBody = {
+    account_name: "Agent live account",
+    environment: "live",
+    credentials: { source: "managed", api_key: LIVE_API_KEY, secret_key: LIVE_SECRET_KEY },
+    key_request_uid: registration.uid,
+  };
+  expect(accountWrites).toEqual([
+    { method: "POST", path: `/v1/accounts/key-requests/${unwanted.uid}/actions/cancel`, body: {} },
+    { method: "POST", path: "/v1/accounts/registration/preflight", body: registrationBody },
+    { method: "POST", path: "/v1/accounts", body: registrationBody },
+    {
+      method: "PATCH",
+      path: "/v1/accounts/account-paper",
+      body: {
+        credentials: { source: "managed", api_key: ROTATED_API_KEY, secret_key: ROTATED_SECRET_KEY },
+        key_request_uid: rotation.uid,
+      },
+    },
+  ]);
+  expectNoCredentialLeak(requestUrls, [LIVE_API_KEY, LIVE_SECRET_KEY, ROTATED_API_KEY, ROTATED_SECRET_KEY]);
+});
+
 test("plans asset registration, creates a universe, and extracts its components", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Register Alpaca-backed assets" })).toBeVisible();

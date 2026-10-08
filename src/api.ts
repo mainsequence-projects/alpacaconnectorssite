@@ -9,6 +9,7 @@ export const API_ENDPOINTS = {
   accounts: "/v1/accounts",
   accountDiscovery: "/v1/accounts/discovery",
   accountRegistrationPreflight: "/v1/accounts/registration/preflight",
+  accountKeyRequests: "/v1/accounts/key-requests",
   barConfigurations: "/v1/market-data/bar-configurations",
   barConfigurationDiscovery: "/v1/market-data/bar-configurations/discovery",
   signalJobs: "/v1/signal-jobs",
@@ -21,6 +22,10 @@ export const API_ENDPOINTS = {
 
 export function assetRegistrationOperationPath(operationUid: string): string {
   return `${API_ENDPOINTS.assetRegistrationOperations}/${encodeURIComponent(operationUid)}`;
+}
+
+export function accountKeyRequestCancelPath(keyRequestUid: string): string {
+  return `${API_ENDPOINTS.accountKeyRequests}/${encodeURIComponent(keyRequestUid)}/actions/cancel`;
 }
 
 export function universeSourcePreviewPath(sourceUid: string): string {
@@ -120,6 +125,29 @@ export interface AccountRegistrationRequest {
   account_name: string | null;
   environment: "paper" | "live";
   credentials: ManagedAlpacaCredentials;
+  /** The signed-in person's pending key request this registration completes (connector ADR 0015). */
+  key_request_uid?: string;
+}
+
+/**
+ * A request, started by the Alpaca Agent for the signed-in person, to enter Alpaca keys here:
+ * `register` a new account or `rotate` an existing account's keys (connector ADR 0015). The API
+ * lists only the person's own pending, unexpired requests and holds no credential in them.
+ */
+export interface AccountKeyRequest {
+  uid: string;
+  action: "register" | "rotate";
+  account_name: string | null;
+  environment: "paper" | "live";
+  account_uid: string | null;
+  status: "pending" | "completed" | "cancelled" | "expired";
+  created_at: string;
+  expires_at: string;
+  completed_at: string | null;
+}
+
+export interface AccountKeyRequestCollection {
+  items: AccountKeyRequest[];
 }
 
 export interface AccountSecretWrite {
@@ -154,6 +182,8 @@ export interface AccountUpdateRequest {
   account_name?: string;
   account_is_active?: boolean;
   credentials?: ManagedAlpacaCredentials;
+  /** The pending rotation request these new keys complete; requires `credentials`. */
+  key_request_uid?: string;
 }
 
 export interface AccountDeleteResponse {
