@@ -1,6 +1,6 @@
 ---
 name: build-command-center-application
-description: Design, build, migrate, or review a complete Command Center-compatible application and select the correct @dev-mainsequence/command-center-sdk surfaces before implementation. Use when deciding production embedding, application-shell and navigation depth, startup readiness, resource lists, actions, details, themes, backend contracts, and iframe integration. Route each selected surface to its focused implementation skill without redefining SDK contracts.
+description: Design, build, migrate, or review a complete Command Center-compatible application and select the correct @dev-mainsequence/command-center-sdk surfaces before implementation. Use when deciding production embedding, application-shell and navigation depth, startup readiness, resource lists, actions, details, themes, backend contracts, iframe integration, and whether the application needs a chat or AI capabilities, which come from @dev-mainsequence/command-center-ai. Route each selected surface to its focused implementation skill without redefining SDK contracts.
 ---
 
 # Build A Command Center Application
@@ -18,8 +18,13 @@ Make these cross-cutting decisions first:
 1. Integrate the complete application through the application-owned `mainsequence.*` version-one
    ready/initialize protocol. Route this work to `$integrate-static-site-iframe`. This embedding is
    the default for a Command Center application, not an optional alternative to its internal
-   pages. When the application calls a FastAPI ResourceRelease, use that same skill's delegated
-   `fetchFastApi` workflow instead of inventing authentication or postMessage behavior.
+   pages. For a hosted application calling a FastAPI ResourceRelease, use that same skill's
+   delegated `fetchFastApi` workflow. Before implementing top-level local Vite API calls, follow
+   that skill's required loopback FastAPI runner, CLI identity, readiness, and `/api` proxy setup;
+   local requests need no release UID.
+   A non-local direct link is not a hosted iframe: without the validated trusted-host handshake,
+   delegated API access is `unsupported`; use an unavailable state or a separately authenticated
+   application-owned backend. Never reuse local CLI identity for a deployed direct link.
 2. Apply SDK tokens, presets, typography, density, surface hierarchy, data visualization, and
    packaged styles through `$theme-command-center-app`. Treat its closed-token audit as a required
    build gate whenever the base theme stylesheet is imported.
@@ -51,10 +56,13 @@ Choose the highest-level composition that owns the required lifecycle:
 | Embedded root shell with zero/one/two-level navigation | `/navigation` shells and `/navigation/testing` | `$compose-command-center-application-shell` |
 | Complete route gutters, header, section rhythm, cards, and card grids | `/layout` primitives | `$compose-command-center-page` |
 | Blocking application startup, reconnection, or prerequisite progress | `/feedback` controlled primitives | `$build-application-loading-flow` |
+| Page and card actions, badges, and labelled fields | `/controls` primitives | `$compose-command-center-controls` |
 | Domain-object collection | `ResourceListPage` | `$build-resource-list` |
 | One domain object with summary, actions, and sections | `ResourceDetailShell` | `$build-resource-detail` |
 | Searchable single or multiple choice | `ResourcePicker` | `$build-resource-picker` |
+| Many items chosen side by side from a long list (who gets access) | `ResourceTransferList` | `$build-resource-picker` |
 | List, row, detail, or bulk operation | Resource action contracts | `$add-resource-actions` |
+| A chat or AI capabilities: a conversation with a Main Sequence Agent, agent sessions, model providers | None in the SDK; install `@dev-mainsequence/command-center-ai` as `$use-command-center-sdk` describes | `$use-command-center-ai` |
 
 Do not select a primitive because it can display similar pixels. Select the composition whose
 contract owns the behavior, state, and reuse boundary.
@@ -110,9 +118,11 @@ Use `ResourceDetailShell` for one identified domain object. Compose it from:
 - related-resource collections rendered with the embedded list composition; and
 - domain-specific content contributed inside the standard shell.
 
-Keep tab state controlled by the host router when it must survive navigation or deep links. Route
-the implementation to `$build-resource-detail`. Product-specific composition remains in the
-consumer application.
+Keep tab state controlled by the host router when it must survive navigation or deep links, and
+resolve hidden and disabled tabs with `resolveResourceDetailTabs` instead of filtering them by hand.
+The shell's tabs own the keyboard model, tab icons, and the More menu for tabs that do not fit; an
+application never builds its own tab strip. Route the implementation to `$build-resource-detail`.
+Product-specific composition remains in the consumer application.
 
 ## Route Backend And Contract Work
 
@@ -152,6 +162,7 @@ Resource collections:
 Resource details:
 Action placement:
 Backend adapters/contracts:
+AI capabilities (none, or Command Center AI with its right rail or expanded page):
 Selected focused skills:
 Rejected alternatives and reasons:
 ```
@@ -173,7 +184,12 @@ contracts or rebuild their owned behavior in this general skill.
 - Do not reproduce the main Command Center's global navigation or settings UI.
 - Do not recreate published page/card spacing with application-owned panels and sibling margins.
 - Do not double-wrap `ResourceListPage` or `ResourceDetailShell` in layout cards.
+- Do not write a raw `<button>`, `<input>`, `<textarea>`, or `<label>`, a Tailwind or CSS button, or
+  an application-owned control kit; every action, badge, and labelled field comes from `/controls`
+  so the application renders its controls exactly like every other Command Center site.
 - Do not duplicate canonical contracts or modify an installed SDK.
+- Do not build a chat from SDK primitives or call the platform's agent session, Agent runtime, or
+  model provider routes from the application; AI capabilities come from Command Center AI.
 - Do not invent theme variables, literal fallbacks, or application-owned replacements for
   published semantic visual tokens.
 

@@ -34,6 +34,7 @@ Do not add top-level sibling margins to recreate stack spacing. Do not add defau
 consumer `.panel` class when `ApplicationCard` owns that surface.
 
 ```tsx
+import { Button } from "@dev-mainsequence/command-center-sdk/controls";
 import {
   ApplicationCard,
   ApplicationCardGrid,
@@ -49,7 +50,7 @@ export function PortfolioPage() {
         eyebrow="Portfolio operations"
         title="Portfolio overview"
         description="Monitor exposures and rebalance the active portfolio."
-        actions={<button type="button">Rebalance</button>}
+        actions={<Button variant="primary">Rebalance</Button>}
       />
       <ApplicationPageStack>
         <StatusBanner />
@@ -81,11 +82,16 @@ Place `ResourceListPage` and `ResourceDetailShell` directly in `ApplicationPageS
 them in `ApplicationCard`; those views already own their internal surface, padding, and lifecycle.
 Do the same for any specialized renderer whose public documentation says it owns its frame.
 
+A page about one object with a summary and sections is a `ResourceDetailShell`, even when the
+object is not a listed resource; route it to `$build-resource-detail`. Never put a tab strip in an
+`ApplicationCard` header or build one from buttons: the shell's tabs own the keyboard model, the tab
+panel, and the More menu.
+
 Keep domain-specific charts, forms, split panes, maps, editors, and canvases application-owned.
 The layout primitives do not own routing, authentication, permissions, persistence, API transport,
 notifications, or product actions. Route application-level staged loading, retry, and failure
 presentation to `$build-application-loading-flow`; the application still owns the underlying
-policy.
+policy. Route actions, badges, and labelled fields to `$compose-command-center-controls`.
 
 ## Verify Final Browser Geometry
 
@@ -113,7 +119,9 @@ and 1024×768 and 1280×800 with a fine pointer. Coarse entries report `touch-ta
 `sticky-hover`; entries narrower than 768px report `input-zoom`. Configure `hasTouch` and
 `isMobile` on the Playwright context for coarse entries and keep a viewport meta tag in the
 document. Exercise at least one dark and one light preset and representative loaded, loading, error, empty, long-title, dense-table, and
-variable-card-count states. Treat every reported overflow, missing stack gap, missing standard card
+variable-card-count states. The verifier skips what the browser does not show, including the
+content of a closed `<details>` other than its `<summary>`, so verify a page with collapsible
+sections closed as it loads, then again after opening them. Treat every reported overflow, missing stack gap, missing standard card
 inset, card overlap/collapse failure, header collision, or clipped interactive element as a failure.
 Use screenshots for review when layout changes, but do not replace geometry assertions with visual
 approval alone.
@@ -127,6 +135,8 @@ npx command-center-sdk theme audit --path src
 ## Enforce The Boundary
 
 - Keep exactly one `ApplicationPage` root per complete rendered route.
+- Render header and card actions with `Button` from `/controls`; never a raw `<button>` or a
+  Tailwind button.
 - Keep stable `data-cc-*` attributes; the verifier uses them as a public test contract.
 - Prefer parent stack/grid gaps over child margins.
 - Keep standard card padding unless the content is explicitly full-bleed.

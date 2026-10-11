@@ -1,4 +1,4 @@
 interface:
-  display_name: "Integrate Static-Site Iframe"
-  short_description: "Connect static sites to Command Center context"
-  default_prompt: "Use $integrate-static-site-iframe to connect a static-site application to Command Center theme, public user context, and delegated FastAPI HTTP or WebSocket release access."
+  display_name: "Integrate Static Site and API"
+  short_description: "Choose local API, trusted iframe, or direct-link path"
+  default_prompt: "Use $integrate-static-site-iframe to distinguish local top-level Vite/FastAPI, non-local trusted Command Center iframe, and non-local direct-link modes. Implement the correct API transport and identity source, including the required local Vite/FastAPI proxy and developer identity setup."
