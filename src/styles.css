@@ -79,6 +79,38 @@ a {
   background: var(--background);
 }
 
+/* The Alpaca Agent's rail and launcher are Command Center AI's (ChatRail, ChatLauncher). Docked,
+   the rail is the shell's last column and the page narrows beside it; below 1400px it floats. */
+.alpaca-assistant-column {
+  flex: 0 0 540px;
+  width: 540px;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+}
+
+.alpaca-assistant-notice {
+  position: fixed;
+  left: 50%;
+  bottom: calc(1.25rem + var(--application-safe-area-bottom));
+  z-index: 120;
+  display: grid;
+  gap: 0.25rem;
+  max-width: min(28rem, calc(100vw - 2rem));
+  padding: 0.75rem 1rem;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: var(--shadow-picker);
+  font-size: var(--font-size-body-sm);
+}
+
+.alpaca-assistant-notice--error {
+  border-color: var(--danger);
+}
+
 .alpaca-navigation-logo {
   display: inline-block;
   background-color: currentColor;

@@ -35,6 +35,7 @@ import {
 } from "./api";
 import { useAlpacaApiTransport, type ApplicationTransportStatus } from "./transport";
 import { AccountsPage } from "./accounts";
+import { AlpacaAgentAssistant, DockedAlpacaAgentRail, useSiteAgent } from "./assistant";
 import { AssetResourceList } from "./assetResource";
 import { BarsConfigurationsPage } from "./barConfigurations";
 import { PortfoliosPage } from "./portfolios";
@@ -653,6 +654,12 @@ function UniversesPage({ transport }: { transport: ApiTransport }) {
 
 export default function App() {
   const transportState = useAlpacaApiTransport();
+  // The Alpaca Agent and its Environment, from the API's configuration on page load; never the build.
+  const siteAgent = useSiteAgent(
+    transportState.transport,
+    transportState.platformRequests,
+    transportState.context ? transportState.context.userUid : undefined,
+  );
   const [route, setRoute] = useState<RouteId>(() => routeFromPath(window.location.pathname));
   const [configuration, setConfiguration] = useState<ProjectConfigurationResponse | null>(null);
   const [configurationError, setConfigurationError] = useState<string | null>(null);
@@ -702,7 +709,7 @@ export default function App() {
     navigate(intent.destinationId as RouteId);
   }, [navigate]);
 
-  return (
+  const shell = (
     <div className="cc-application-navigation-shell application-shell">
       <ApplicationNavigationPanel
         activeDestinationId={route}
@@ -765,6 +772,14 @@ export default function App() {
           <UniversesPage transport={transportState.transport} />
         )}
       </div>
+      <DockedAlpacaAgentRail />
     </div>
+  );
+
+  // One conversation engine above the shell, so neither the shell nor its pages remount for it.
+  return (
+    <AlpacaAgentAssistant agent={siteAgent} platformRequests={transportState.platformRequests}>
+      {shell}
+    </AlpacaAgentAssistant>
   );
 }

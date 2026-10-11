@@ -10,7 +10,9 @@ discovery, and action confirmation.
 ## Verified baseline
 
 - The static-site repository is a root-level Vite and React application.
-- `@dev-mainsequence/command-center-sdk` is current at `0.1.18`.
+- `@dev-mainsequence/command-center-sdk` was `0.1.18` when this plan was written; the application
+  now uses `0.5.17`, with `@dev-mainsequence/command-center-ai` `0.0.13` for the Alpaca Agent
+  conversation.
 - Package-owned Command Center skills and authenticated platform skills were synchronized before
   implementation.
 - The backend API tests for the current capability routes pass.

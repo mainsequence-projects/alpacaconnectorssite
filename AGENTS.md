@@ -16,6 +16,17 @@ This repository is the Command Center static-site application for the Alpaca Con
   browser code never holds or constructs a token.
 - Apply every host theme context update. Use published SDK semantic variables in authored CSS and
   keep the SDK theme audit passing.
+- Request delegated FastAPI access and platform requests only after the host's first context; the
+  SDK refuses them before it, so `src/transport.ts` exposes the transport only then.
+- The Alpaca Agent conversation uses `@dev-mainsequence/command-center-ai`'s public components
+  (`ChatLauncher`, `ChatRail`, `ChatThread`, one `ChatEngineProvider` above the shell;
+  `src/assistant.tsx`). Never hand-build a rail, thread, or composer. The Agent and its Environment
+  come only from `GET /v1/project-state/configuration` (`agent_uid`,
+  `organization_environment_uid`), read when the page loads; never put either in
+  `build_environment`, a `VITE_` value, or code, and never take the Environment from Command Center.
+  When the API names no Agent, hide the assistant and keep every page working. Platform requests go
+  through the host bridge (`client.sendPlatformRequest`), or in Vite development through the SDK's
+  `platformRequestProxy()`.
 
 ## Current API surfaces
 
@@ -30,8 +41,10 @@ This repository is the Command Center static-site application for the Alpaca Con
   registration or rotation form with the request's settings fixed and sends its `key_request_uid`
   with the keys; Dismiss cancels it. Command Center passes nothing from its URL into the site, so a
   request is never read from the URL.
-- The workflow names the API release by repository and key (`alpaca-connectors` / `alpaca`) in
-  `build_environment`, never by a pinned UID.
+- The workflow (`api_version: "2.3.0"`, `kind: static_site`) names the API release by repository
+  and key (`alpaca-connectors` / `alpaca`) in `build_environment`, never by a pinned UID. Never
+  rename the workflow file or the `alpaca-connectors-site` key: the site's UID, URL, and Command
+  Center link depend on them, and the Alpaca Agent hands people that link for key entry.
 - Universes: account-independent ETF holdings sources; Run asks for an Alpaca account only as
   execution context when it registers newly discovered constituents.
 - Bars: create, list, edit, and delete stored Alpaca bar configurations using registered accounts,

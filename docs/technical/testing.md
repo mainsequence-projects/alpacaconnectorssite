@@ -40,5 +40,13 @@ from the embedded application carries the delegated `Authorization: Bearer` and
 session token from `scripts/e2e-mainsequence-cli.mjs`, a stand-in for `mainsequence auth token`,
 while its browser requests carry no token.
 
+The Alpaca Agent tests run inside the host fixture, whose configuration answer names a synthetic
+Agent and Environment and whose host page records every platform request the application sends
+through the bridge (answering each with 404). They check that the launcher appears only when the API
+names an Agent, that a visit that does not open the rail sends no write, that opening it gets or
+creates the session of the API's Agent, as the host's person, with every platform read scoped to the
+API's Environment, that the rail floats below 1400px and docks beside the narrowed page from 1400px,
+and that with `agent_uid: null` the assistant is hidden and the pages keep working.
+
 The browser fixture uses a fake ResourceRelease UID and synthetic delegated and session tokens. It
 does not call Alpaca or Main Sequence.

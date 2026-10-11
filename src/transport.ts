@@ -19,11 +19,29 @@ const COMMAND_CENTER_ORIGIN = import.meta.env.VITE_COMMAND_CENTER_ORIGIN?.trim()
 /** The end-to-end fixture API; in Vite development the dev server proxies to this URL instead. */
 const LOCAL_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8321";
 
+/** Where the SDK's `platformRequestProxy()` serves platform requests on the Vite dev server. */
+const LOCAL_PLATFORM_PROXY_PATH = "/__mainsequence__";
+/** How long the application waits for the host's first context before it reports the host silent. */
+const HANDSHAKE_TIMEOUT_MS = 15_000;
+
 export type ApplicationTransportStatus = StaticSiteFastApiTransportStatus | "local" | "starting";
+
+/**
+ * How the Alpaca Agent's conversation sends its platform requests as the person. The site never
+ * holds a platform credential.
+ * - `host`: embedded; Command Center sends each request as its signed-in person.
+ * - `local`: Vite development; the dev server's `platformRequestProxy()` sends it as the developer.
+ */
+export interface PlatformRequestChannel {
+  kind: "host" | "local";
+  send: (request: Request) => Promise<Response>;
+}
 
 export interface ApplicationTransportState {
   context: StaticSiteIframeContext | null;
   error: string | null;
+  /** Null where no platform session exists: direct production visits and end-to-end builds. */
+  platformRequests: PlatformRequestChannel | null;
   status: ApplicationTransportStatus;
   transport: ApiTransport | null;
 }
@@ -60,9 +78,31 @@ function createDirectTransport(): ApiTransport {
   };
 }
 
+/**
+ * Vite development has no Command Center host. The SDK's `platformRequestProxy()` (vite.config.ts)
+ * sends the request as the developer, with the session `npx command-center-sdk login` saved on this
+ * machine. Only the method, the path and query, `accept`, `content-type` and the body cross, as
+ * through the host bridge.
+ */
+async function sendThroughLocalPlatformProxy(request: Request): Promise<Response> {
+  const { pathname, search } = new URL(request.url);
+  const headers = new Headers();
+  for (const name of ["accept", "content-type"]) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  return fetch(`${LOCAL_PLATFORM_PROXY_PATH}${pathname}${search}`, {
+    method: request.method,
+    headers,
+    body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.text(),
+    signal: request.signal,
+  });
+}
+
 export function useAlpacaApiTransport(): ApplicationTransportState {
   const [context, setContext] = useState<StaticSiteIframeContext | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [platformRequests, setPlatformRequests] = useState<PlatformRequestChannel | null>(null);
   const [status, setStatus] = useState<ApplicationTransportStatus>("starting");
   const [transport, setTransport] = useState<ApiTransport | null>(null);
 
@@ -78,6 +118,7 @@ export function useAlpacaApiTransport(): ApplicationTransportState {
         return;
       }
       setTransport(createDirectTransport());
+      if (import.meta.env.DEV) setPlatformRequests({ kind: "local", send: sendThroughLocalPlatformProxy });
       setStatus("local");
       return;
     }
@@ -97,6 +138,8 @@ export function useAlpacaApiTransport(): ApplicationTransportState {
       return;
     }
 
+    const releaseUid = FASTAPI_RELEASE_UID;
+    let connected = false;
     const client = createStaticSiteIframeClient({
       channel: CHANNEL,
       hostOrigin,
@@ -105,9 +148,18 @@ export function useAlpacaApiTransport(): ApplicationTransportState {
         applyContextTheme(nextContext);
         setContext(nextContext);
         setError(null);
+        // The SDK refuses delegated FastAPI and platform requests until the host's first context
+        // (integrate-static-site-iframe), so the application gets its transport only then.
+        if (!connected) {
+          connected = true;
+          window.clearTimeout(handshakeTimer);
+          setTransport(apiTransport);
+          setPlatformRequests(platformChannel);
+          setStatus("idle");
+        }
       },
       onFastApiStateChange(nextState) {
-        if (nextState.resourceReleaseUid === FASTAPI_RELEASE_UID) {
+        if (nextState.resourceReleaseUid === releaseUid) {
           setStatus(nextState.status);
         }
       },
@@ -115,23 +167,29 @@ export function useAlpacaApiTransport(): ApplicationTransportState {
         setError(`Command Center bridge error: ${message}`);
       },
     });
+    const apiTransport: ApiTransport = {
+      async request<T>(path: string, init?: RequestInit) {
+        assertRelativeApiPath(path);
+        const response = await client.fetchFastApi({ resourceReleaseUid: releaseUid, path }, init);
+        return readApiResponse<T>(response);
+      },
+    };
+    const platformChannel: PlatformRequestChannel = {
+      kind: "host",
+      send: (request) => client.sendPlatformRequest(request),
+    };
+    const handshakeTimer = window.setTimeout(() => {
+      if (connected) return;
+      setError("Command Center did not share its session with this application. Reload the page in Command Center.");
+      setStatus("unavailable");
+    }, HANDSHAKE_TIMEOUT_MS);
 
     const onMessage = (event: MessageEvent) => client.handleMessage(event);
     window.addEventListener("message", onMessage);
     client.announceReady();
-    setTransport({
-      async request<T>(path: string, init?: RequestInit) {
-        assertRelativeApiPath(path);
-        const response = await client.fetchFastApi(
-          { resourceReleaseUid: FASTAPI_RELEASE_UID, path },
-          init,
-        );
-        return readApiResponse<T>(response);
-      },
-    });
-    setStatus("idle");
 
     return () => {
+      window.clearTimeout(handshakeTimer);
       window.removeEventListener("message", onMessage);
       client.clearFastApiCredentials();
       client.dispose();
@@ -139,7 +197,7 @@ export function useAlpacaApiTransport(): ApplicationTransportState {
   }, []);
 
   return useMemo(
-    () => ({ context, error, status, transport }),
-    [context, error, status, transport],
+    () => ({ context, error, platformRequests, status, transport }),
+    [context, error, platformRequests, status, transport],
   );
 }

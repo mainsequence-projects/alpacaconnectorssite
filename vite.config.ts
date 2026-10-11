@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import type { IncomingMessage } from "node:http";
 
+import { platformRequestProxy } from "@dev-mainsequence/command-center-sdk/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv, type Logger, type Plugin, type ProxyOptions } from "vite";
 
@@ -181,7 +182,9 @@ export default defineConfig(({ command, mode, isPreview }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
   const localApi = localApiSessionProxy(env.VITE_API_BASE_URL?.trim() || DEFAULT_LOCAL_API_BASE_URL);
   return {
-    plugins: [react(), localApi.plugin],
+    // platformRequestProxy(): the Alpaca Agent conversation's platform requests, sent as the
+    // developer with the session `npx command-center-sdk login` saves (src/transport.ts).
+    plugins: [react(), localApi.plugin, platformRequestProxy()],
     server: { proxy: localApi.proxy },
   };
 });

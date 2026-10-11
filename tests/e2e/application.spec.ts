@@ -1117,6 +1117,99 @@ test("uses delegated FastAPI credentials and applies host theme updates", async 
   await expect(application.locator("html")).toHaveAttribute("data-theme-id", "quartz-light");
 });
 
+// The fixture API's configuration names these (connector ee18b82); the site's build names neither.
+const SITE_AGENT_UID = "22222222-2222-4222-8222-222222222222";
+const SITE_ENVIRONMENT_UID = "33333333-3333-4333-8333-333333333333";
+
+interface HostPlatformRequest {
+  method: string;
+  path: string;
+  userUid: string;
+  body: string | null;
+}
+
+async function setSiteAgent(request: APIRequestContext, agentUid: string | null) {
+  await request.post(`${E2E_API_ORIGIN}/__site-agent`, { data: { agent_uid: agentUid } });
+}
+
+async function hostPlatformRequests(page: Page): Promise<HostPlatformRequest[]> {
+  return page.evaluate(() => (window as typeof window & { platformRequests: HostPlatformRequest[] }).platformRequests);
+}
+
+test("opens the Alpaca Agent that the API's configuration names in Command Center AI's rail", async ({ page, request }) => {
+  await setSiteAgent(request, SITE_AGENT_UID);
+  // The host fixture's frame is 900px tall; the launcher sits at its bottom right.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("http://127.0.0.1:4274/");
+  const application = page.frameLocator('iframe[title="Alpaca Connectors"]');
+  await application.getByRole("link", { name: /^Accounts/ }).click();
+  await expect(application.getByRole("heading", { name: "Alpaca account registrations" })).toBeVisible();
+
+  const launcher = application.getByRole("button", { name: "Ask Alpaca Agent" });
+  await expect(launcher).toBeVisible();
+  // A visit that does not open the conversation creates no session.
+  expect((await hostPlatformRequests(page)).filter((entry) => entry.method !== "GET")).toEqual([]);
+  await launcher.click();
+  // Below 1400px the rail floats over the page.
+  const rail = application.getByRole("region", { name: "Alpaca Agent" });
+  await expect(rail).toBeVisible();
+  await expect(rail).toHaveAttribute("data-chat-rail", "overlay");
+  await expect(launcher).toHaveCount(0);
+
+  // The conversation opens the default session of the API's Agent, through the host, as the host's
+  // person, and scopes its platform reads to the API's Environment.
+  await expect
+    .poll(async () => (await hostPlatformRequests(page)).map((entry) => `${entry.method} ${entry.path}`))
+    .toContain(`POST /api/v1/agents/${SITE_AGENT_UID}/sessions/get-or-create-session/`);
+  const platformRequests = await hostPlatformRequests(page);
+  const sessionRequest = platformRequests.find((entry) => entry.path.endsWith("/get-or-create-session/"));
+  expect(JSON.parse(sessionRequest?.body ?? "{}")).toMatchObject({ handle_unique_id: "alpaca_connectors_site" });
+  for (const entry of platformRequests) {
+    expect(entry.userUid).toBe("fixture-user");
+    const environment = new URL(entry.path, "http://platform.invalid").searchParams.get("organization_environment_uid");
+    if (environment !== null) expect(environment).toBe(SITE_ENVIRONMENT_UID);
+  }
+  expect(platformRequests.some((entry) => entry.path.includes(`organization_environment_uid=${SITE_ENVIRONMENT_UID}`))).toBe(true);
+
+  // Closing keeps the page where it was and brings the launcher back.
+  await rail.getByRole("button", { name: "Close chat rail" }).click();
+  await expect(rail).toHaveCount(0);
+  await expect(launcher).toBeVisible();
+  await expect(application.getByRole("heading", { name: "Alpaca account registrations" })).toBeVisible();
+});
+
+test("docks the Alpaca Agent's rail beside the page from 1400px", async ({ page, request }) => {
+  await setSiteAgent(request, SITE_AGENT_UID);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("http://127.0.0.1:4274/");
+  const application = page.frameLocator('iframe[title="Alpaca Connectors"]');
+  await expect(application.getByRole("heading", { name: "Register Alpaca-backed assets" })).toBeVisible();
+  const content = application.locator(".application-content");
+  const fullWidth = (await content.boundingBox())?.width ?? 0;
+
+  await application.getByRole("button", { name: "Ask Alpaca Agent" }).click();
+  const rail = application.getByRole("region", { name: "Alpaca Agent" });
+  await expect(rail).toHaveAttribute("data-chat-rail", "docked");
+  await expect.poll(async () => (await content.boundingBox())?.width ?? 0).toBeLessThanOrEqual(fullWidth - 540);
+  await expect(application.getByRole("heading", { name: "Register Alpaca-backed assets" })).toBeVisible();
+});
+
+test("hides the assistant when the API names no Alpaca Agent and keeps every page working", async ({ page, request }) => {
+  await setSiteAgent(request, null);
+  try {
+    await page.goto("http://127.0.0.1:4274/");
+    const application = page.frameLocator('iframe[title="Alpaca Connectors"]');
+    await expect(application.getByRole("heading", { name: "Register Alpaca-backed assets" })).toBeVisible();
+    await application.getByRole("link", { name: /^Accounts/ }).click();
+    await expect(application.getByRole("heading", { name: "Alpaca account registrations" })).toBeVisible();
+    await expect(application.getByRole("button", { name: "Ask Alpaca Agent" })).toHaveCount(0);
+    await expect(application.getByRole("region", { name: "Alpaca Agent" })).toHaveCount(0);
+    expect(await hostPlatformRequests(page)).toEqual([]);
+  } finally {
+    await setSiteAgent(request, SITE_AGENT_UID);
+  }
+});
+
 test("authenticates local development API requests in the dev server, not the browser", async ({ page, request }) => {
   const devServerOrigin = "http://127.0.0.1:4275";
   await request.delete(`${E2E_API_ORIGIN}/__requests`);

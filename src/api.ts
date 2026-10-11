@@ -40,8 +40,16 @@ export interface ProjectConfigurationResponse {
   supported_component_providers: string[];
   migrated_market_data_profiles: string[];
   universe_sources_are_user_managed: boolean;
+  /** When `agent_uid` is set, that Agent's own Environment (connector `docs/api.md`). */
   organization_environment_uid: string | null;
   organization_environment_name: string | null;
+  /**
+   * This branch's deployed Alpaca Agent, which the API finds when the request arrives; null when it
+   * cannot name exactly one. Absent from APIs before connector ee18b82. Never from the site's build.
+   */
+  agent_uid?: string | null;
+  /** The person the API answered for. */
+  request_user_uid?: string | null;
   [key: string]: unknown;
 }
 

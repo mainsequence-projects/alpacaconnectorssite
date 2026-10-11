@@ -8,7 +8,9 @@ The public user UID supplied by the host is not used as authorization evidence.
 
 API requests use `fetchFastApi` with a public FastAPI ResourceRelease UID and relative paths. The
 SDK obtains and refreshes narrow delegated credentials in memory. Application code does not read,
-decode, persist, log, or construct authorization headers.
+decode, persist, log, or construct authorization headers. The SDK refuses delegated and platform
+requests until the host's first context, so the application receives its transport only then; a
+host that sends no context within 15 seconds ends in an error screen.
 
 A direct fetch transport is available only in Vite development and end-to-end builds. A direct
 production visit fails closed with an application status screen.
@@ -28,6 +30,35 @@ in the developer's browser can use it.
 The CLI is `MAINSEQUENCE_CLI`, else `mainsequence` on `PATH`, and its session must be for the
 backend in the API's `MAINSEQUENCE_ENDPOINT`. End-to-end builds call their fixture API directly.
 
+## Alpaca Agent conversation
+
+Every page offers a conversation with the Alpaca Agent through Command Center AI's public
+components: **Ask Alpaca Agent** (`ChatLauncher`) opens `ChatRail` with `ChatThread`
+(`src/assistant.tsx`). The rail docks as the shell's last column from 1400px wide, so the page
+narrows beside it, and floats over the page below that. One `ChatEngineProvider` sits above the
+shell from the first render, so neither the shell nor its pages remount when the Agent becomes
+known, and closing the rail keeps the page as it was.
+
+- **Which Agent.** The site reads `GET /v1/project-state/configuration` once when the page loads
+  and takes `agent_uid` and `organization_environment_uid` from that one answer (connector
+  `docs/api.md`, "Project State And The Site's Agent"). The API finds the Agent when the request
+  arrives, so a re-created Agent reaches the site in its next answer. Neither UID is a build value
+  or comes from the person's Command Center Environment.
+- **When it is hidden.** The launcher is hidden, and every page keeps working, when the API answers
+  `agent_uid: null`, the configuration cannot be read, the API answered for another person than the
+  one the platform requests go out as (`request_user_uid`), or the mode has no platform session
+  (a direct production visit, or an end-to-end build opened directly).
+- **Platform requests.** The conversation's platform requests go out as the person: embedded,
+  through the host bridge (`client.sendPlatformRequest`); in Vite development, through the SDK's
+  `platformRequestProxy()` on the dev server (`/__mainsequence__`), as the developer signed in with
+  `npx command-center-sdk login` for the backend in `MAINSEQUENCE_ENDPOINT`. The page never holds a
+  platform token.
+- **Session.** One default session per person and Agent behind the handle
+  `alpaca_connectors_site`. A visit that does not open the rail creates none: while the rail is
+  closed the engine reads only the Agent's icon for the launcher.
+- The expanded rail, a session explorer, and model provider settings are not part of the site;
+  people manage their model providers in Command Center.
+
 ## Runtime configuration
 
 | Variable | Purpose |
@@ -36,9 +67,10 @@ backend in the API's `MAINSEQUENCE_ENDPOINT`. End-to-end builds call their fixtu
 | `VITE_FASTAPI_RESOURCE_RELEASE_UID` | Public target FastAPI ResourceRelease UID |
 | `VITE_API_BASE_URL` | Local API origin (`http://127.0.0.1:8321`) the dev server proxies to, and the end-to-end fixture API; ignored by normal production builds |
 | `MAINSEQUENCE_CLI` | Dev server only, not a `VITE_` value: the Main Sequence CLI whose `auth token` authenticates local API requests; defaults to `mainsequence` on `PATH` |
+| `MAINSEQUENCE_ENDPOINT` | Dev server only: the platform whose saved session `platformRequestProxy()` uses for the Agent conversation |
 
 These are routing values, not secrets. Alpaca API keys and Main Sequence tokens must never be added
-to static-site environment variables.
+to static-site environment variables, and neither may the Alpaca Agent or its Environment.
 
 The tracked `.env.development` owns the local API URL that `npm run dev` proxies to. Production owns the
 FastAPI release UID through the Static Site workflow's `build_environment`; the two modes therefore

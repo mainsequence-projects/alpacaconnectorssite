@@ -5,6 +5,11 @@ const PORT = 4274;
 const APP_ORIGIN = "http://127.0.0.1:4273";
 const CHANNEL = "mainsequence.alpaca-connectors";
 const RELEASE_UID = "11111111-1111-4111-8111-111111111111";
+// The Agent and Environment the API's configuration names (connector ee18b82). Tests switch the
+// Agent off with the mock-only `POST /__site-agent`.
+const SITE_AGENT_UID = "22222222-2222-4222-8222-222222222222";
+const SITE_ENVIRONMENT_UID = "33333333-3333-4333-8333-333333333333";
+let siteAgentUid = SITE_AGENT_UID;
 const requestLog = [];
 const registrationOperations = new Map();
 const universeSources = [
@@ -607,10 +612,29 @@ const hostHtml = `<!doctype html>
         }, ${JSON.stringify(APP_ORIGIN)});
       }
       window.switchTheme = () => sendContext("quartz-light", "light");
+      // Platform requests the application sends through the bridge (the Agent conversation's). The
+      // fixture records them and serves no platform route.
+      window.platformRequests = [];
       window.addEventListener("message", (event) => {
         if (event.origin !== ${JSON.stringify(APP_ORIGIN)} || event.source !== frame.contentWindow) return;
         if (event.data?.channel !== channel || event.data?.version !== 1) return;
         if (event.data.type === "ready") sendContext("main-sequence-space", "dark");
+        if (event.data.type === "platform-request") {
+          const { requestId, userUid, method, path, body } = event.data.payload;
+          window.platformRequests.push({ method, path, userUid, body: body ?? null });
+          frame.contentWindow.postMessage({
+            channel,
+            version: 1,
+            type: "platform-response",
+            payload: {
+              requestId,
+              status: 404,
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ detail: "The host fixture serves no platform routes." }),
+              bodyEncoding: "text",
+            },
+          }, ${JSON.stringify(APP_ORIGIN)});
+        }
         if (event.data.type === "fastapi-credential-request") {
           frame.contentWindow.postMessage({
             channel,
@@ -774,6 +798,11 @@ createServer(async (request, response) => {
     return sendJson(response, 200, { requests: requestLog });
   }
   if (url.pathname === "/__requests") return sendJson(response, 200, { requests: requestLog });
+  if (url.pathname === "/__site-agent" && request.method === "POST") {
+    const body = await readJson(request);
+    siteAgentUid = typeof body.agent_uid === "string" ? body.agent_uid : null;
+    return sendJson(response, 200, { agent_uid: siteAgentUid });
+  }
   if (url.pathname === "/__key-requests" && request.method === "POST") {
     const body = await readJson(request);
     const now = new Date();
@@ -807,8 +836,10 @@ createServer(async (request, response) => {
       supported_component_providers: ["ishares"],
       migrated_market_data_profiles: ["1d/iex/raw", "1d/sip/all"],
       universe_sources_are_user_managed: true,
-      organization_environment_uid: "environment-local",
+      organization_environment_uid: SITE_ENVIRONMENT_UID,
       organization_environment_name: "Local development",
+      agent_uid: siteAgentUid,
+      request_user_uid: "fixture-user",
       registered_account_count: accounts.length,
       has_registered_account: accounts.length > 0,
     });

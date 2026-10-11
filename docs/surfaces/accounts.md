@@ -39,6 +39,10 @@ position UUID can differ from its canonical Asset catalog UUID.
 
 ## Requests from the Alpaca Agent
 
+To talk to the Alpaca Agent from any page, select **Ask Alpaca Agent** at the bottom right. The
+conversation opens beside the page and keeps your place; it appears only when the Agent is available
+in this Environment.
+
 The Alpaca Agent never receives your keys. When you ask it to register an account or replace an
 account's keys, it starts a request for you and gives you the link to this application. The
 Accounts page then shows **Requested by your Alpaca Agent** with your own pending requests, each
