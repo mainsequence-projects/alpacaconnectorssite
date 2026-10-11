@@ -1,10 +1,11 @@
-api_version: 2.2.0
+api_version: "2.3.0"
 name: alpaca-connectors-site
 resources:
+# Same file and key as the 2.2.0 resource_release declaration, so the site keeps its UID, URL and
+# Command Center link (the Alpaca Agent hands people that link for key entry).
 - key: alpaca-connectors-site
-  kind: resource_release
+  kind: static_site
   spec:
-    release_kind: static_site
     name: Alpaca Connectors
     root_directory: ''
     framework: vite
