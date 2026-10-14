@@ -27,6 +27,15 @@ This repository is the Command Center static-site application for the Alpaca Con
   When the API names no Agent, hide the assistant and keep every page working. Platform requests go
   through the host bridge (`client.sendPlatformRequest`), or in Vite development through the SDK's
   `platformRequestProxy()`.
+- The site-owned full local launch is `npm run dev:stack` (`scripts/dev-stack.mjs`), also used by
+  `.vscode/launch.json` and `.claude/launch.json`. It starts Vite, the sibling connector API, a
+  restricted TAU local Agent and local SQLite MetaTables. Never initialize or migrate automatically,
+  replace occupied site/API/Agent ports, or stop a pre-existing shared MetaTables service.
+- In standalone Vite development only, explicit `VITE_AGENT_MODE=local` selects the AI SDK's
+  `createLocalAgentSource` and SDK `localAgentProxy`; local chat does not resolve a platform Agent,
+  Environment or session. Keep the normal embedded/production contract unchanged. Unavailability
+  is an error, never a deployed-service fallback. Do not add an adapter or enable generic tools to
+  work around TAU's local application-MCP gap (ms-tau-sdk issue #102).
 
 ## Current API surfaces
 
@@ -72,4 +81,4 @@ interactive application features. Do not invent routes or resource adapters for 
 - Check and update the SDK with `npx command-center-sdk application ...`.
 - Strictly synchronize package and platform agent skills before substantial SDK work.
 - Keep user and technical documentation in `docs/` and publish it at `/docs/` in the same build.
-- Run `npm run check`, `npm run build`, and `npm run test:e2e` before claiming completion.
+- Run `npm run check`, `npm run test:launch`, `npm run build`, and `npm run test:e2e` before claiming completion.

@@ -34,5 +34,18 @@ export default defineConfig({
         MAINSEQUENCE_CLI: "scripts/e2e-mainsequence-cli.mjs",
       },
     },
+    {
+      // Explicit local chat mode, using the published SDK proxy and a test-only runtime fixture.
+      command: "npm run dev -- --host 127.0.0.1 --port 4276 --strictPort",
+      url: "http://127.0.0.1:4276",
+      reuseExistingServer: false,
+      timeout: 60_000,
+      env: {
+        VITE_API_BASE_URL: "http://127.0.0.1:4274",
+        VITE_AGENT_MODE: "local",
+        MAINSEQUENCE_TAU_LOCAL_ORIGIN: "http://127.0.0.1:4274",
+        MAINSEQUENCE_CLI: "scripts/e2e-mainsequence-cli.mjs",
+      },
+    },
   ],
 });

@@ -6,6 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:stack": "node scripts/dev-stack.mjs",
+    "dev:stack:check": "node scripts/dev-stack.mjs --check",
+    "test:launch": "node --test tests/local-launch.test.mjs",
     "build": "npm run build:app && npm run build:docs",
     "build:e2e": "vite build --mode e2e && npm run build:docs",
     "preview": "vite preview",

@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Alpaca: site + local API + local Agent + local MetaTables",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/dev-stack.mjs"],
+      "port": 5421,
+      "url": "http://127.0.0.1:5421"
+    }
+  ]
+}

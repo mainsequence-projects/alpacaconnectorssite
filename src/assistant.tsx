@@ -4,6 +4,7 @@ import {
   ChatRail,
   ChatThread,
   createChatBackendConnection,
+  createLocalAgentSource,
   type ChatAuth,
   type ChatDefaultSession,
   type ChatNotice,
@@ -29,6 +30,9 @@ const DOCKED_RAIL_QUERY = "(min-width: 1400px)";
 const NOTICE_DURATION_MS = 7000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VIEW_CONTEXT = { application: "alpaca-connectors" } as const;
+// Explicit development selection, never a fallback when the local Agent is unavailable.
+const LOCAL_AGENT_REQUESTED = import.meta.env.DEV && import.meta.env.VITE_AGENT_MODE === "local";
+const USE_LOCAL_AGENT = LOCAL_AGENT_REQUESTED && window.parent === window;
 
 const COPY: Partial<ChatThreadCopy> = {
   emptyTitle: "Ask the Alpaca Agent",
@@ -38,6 +42,10 @@ const COPY: Partial<ChatThreadCopy> = {
   sessionUnavailableTitle: "The Alpaca Agent is unavailable",
   disclaimer: "The Alpaca Agent can make mistakes. Verify important outputs before acting.",
 };
+const LOCAL_COPY: Partial<ChatThreadCopy> = {
+  ...COPY,
+  emptyDescription: "Chat runs against the Agent on this machine. Alpaca application tools and skills are pending TAU issue #102, so local chat cannot perform Alpaca operations yet. No deployed Agent is used.",
+};
 
 /** Who talks to which Agent, in which Environment. */
 export interface SiteAgent {
@@ -45,6 +53,20 @@ export interface SiteAgent {
   environmentUid: string;
   userUid: string;
 }
+
+interface LocalSiteAgent {
+  kind: "local";
+  agentUid: null;
+  environmentUid: null;
+  userUid: null;
+  source: ReturnType<typeof createLocalAgentSource>;
+}
+
+type AssistantAgent = SiteAgent | LocalSiteAgent;
+const LOCAL_AGENT: LocalSiteAgent | null = USE_LOCAL_AGENT
+  ? { kind: "local", agentUid: null, environmentUid: null, userUid: null,
+    source: createLocalAgentSource({ baseUrl: "/__agent__", displayName: "Alpaca Agent (local)" }) }
+  : null;
 
 function uuidOrNull(value: unknown): string | null {
   return typeof value === "string" && UUID.test(value.trim()) ? value.trim() : null;
@@ -74,12 +96,12 @@ export function useSiteAgent(
   transport: ApiTransport | null,
   platformRequests: PlatformRequestChannel | null,
   hostUserUid: string | null | undefined,
-): SiteAgent | null | undefined {
+): AssistantAgent | null | undefined {
   const [configuration, setConfiguration] = useState<ProjectConfigurationResponse | null | undefined>(undefined);
   const [localUserUid, setLocalUserUid] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
-    if (!transport || !platformRequests) return;
+    if (LOCAL_AGENT_REQUESTED || !transport || !platformRequests) return;
     const controller = new AbortController();
     loadProjectConfiguration(transport, controller.signal).then(
       (value) => {
@@ -93,7 +115,7 @@ export function useSiteAgent(
   }, [transport, platformRequests]);
 
   useEffect(() => {
-    if (platformRequests?.kind !== "local") return;
+    if (LOCAL_AGENT_REQUESTED || platformRequests?.kind !== "local") return;
     const controller = new AbortController();
     platformRequests
       .send(new Request(new URL("/api/v1/users/me/", window.location.origin), {
@@ -118,6 +140,8 @@ export function useSiteAgent(
       : null;
 
   return useMemo(() => {
+    // A local launch embedded accidentally stays idle, rather than selecting a deployed Agent.
+    if (LOCAL_AGENT_REQUESTED) return LOCAL_AGENT;
     if (!platformRequests) return null;
     if (configuration === undefined || viewerUid === undefined) return undefined;
     return configuration === null ? null : siteAgentFrom(configuration, viewerUid);
@@ -125,7 +149,7 @@ export function useSiteAgent(
 }
 
 interface AssistantState {
-  agent: SiteAgent | null;
+  agent: AssistantAgent | null;
   close: () => void;
   docked: boolean;
   open: boolean;
@@ -171,8 +195,8 @@ function AlpacaAgentRail({ mode }: { mode: "docked" | "overlay" }) {
   const state = useContext(AssistantContext);
   if (!state?.agent) return null;
   return (
-    <ChatRail title="Alpaca Agent" subtitle="Alpaca Connectors assistant" mode={mode} onClose={state.close}>
-      <ChatThread copy={COPY} surface="overlay" viewer={{ uid: state.agent.userUid }} />
+    <ChatRail title="Alpaca Agent" subtitle={"source" in state.agent ? "Local runtime · Alpaca tools pending TAU #102" : "Alpaca Connectors assistant"} mode={mode} onClose={state.close}>
+      <ChatThread copy={"source" in state.agent ? LOCAL_COPY : COPY} surface="overlay" viewer={{ uid: state.agent.userUid }} />
     </ChatRail>
   );
 }
@@ -203,7 +227,7 @@ export function AlpacaAgentAssistant({
   children,
   platformRequests,
 }: {
-  agent: SiteAgent | null | undefined;
+  agent: AssistantAgent | null | undefined;
   children: ReactNode;
   platformRequests: PlatformRequestChannel | null;
 }) {
@@ -239,6 +263,26 @@ export function AlpacaAgentAssistant({
     [agent, docked, open],
   );
 
+  const content = (
+    <AssistantContext.Provider value={state}>
+      {children}
+      {open && !docked ? <AlpacaAgentRail mode="overlay" /> : null}
+      {agent && !open ? (
+        <ChatLauncher agentUid={agent.agentUid} label="Ask Alpaca Agent" onClick={() => setRequestedOpen(true)} />
+      ) : null}
+      <AssistantNotice notice={notice} />
+    </AssistantContext.Provider>
+  );
+
+  if (agent && "source" in agent) {
+    return (
+      <ChatEngineProvider source={agent.source} isVisible={open} notify={notify}
+        onRequestVisible={() => setRequestedOpen(true)} viewContext={VIEW_CONTEXT}>
+        {content}
+      </ChatEngineProvider>
+    );
+  }
+
   return (
     <ChatEngineProvider
       auth={auth}
@@ -254,14 +298,7 @@ export function AlpacaAgentAssistant({
       showsDefaultSession={open}
       viewContext={VIEW_CONTEXT}
     >
-      <AssistantContext.Provider value={state}>
-        {children}
-        {open && !docked ? <AlpacaAgentRail mode="overlay" /> : null}
-        {agent && !open ? (
-          <ChatLauncher agentUid={agent.agentUid} label="Ask Alpaca Agent" onClick={() => setRequestedOpen(true)} />
-        ) : null}
-        <AssistantNotice notice={notice} />
-      </AssistantContext.Provider>
+      {content}
     </ChatEngineProvider>
   );
 }

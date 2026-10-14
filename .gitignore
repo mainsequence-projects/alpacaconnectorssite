@@ -4,3 +4,4 @@ documentation/.docusaurus/
 test-results/
 playwright-report/
 *.tsbuildinfo
+.local/

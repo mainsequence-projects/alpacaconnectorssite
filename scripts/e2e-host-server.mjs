@@ -827,7 +827,16 @@ createServer(async (request, response) => {
     resourceReleaseUid: request.headers["x-resource-release-uid"] ?? null,
   });
 
-  if (request.method === "GET" && url.pathname === "/health") return sendJson(response, 200, { status: "ok" });
+  if (request.method === "GET" && url.pathname === "/health") return sendJson(response, 200, { status: "ok", mode: "local" });
+  // Public TAU local-chat contract only; a fixture, never a production runtime adapter.
+  if (request.method === "GET" && url.pathname === "/ready") return sendJson(response, 200, { ok: true });
+  if (request.method === "GET" && url.pathname === "/api/chat") return sendJson(response, 200, { ok: true });
+  if (request.method === "GET" && url.pathname === "/api/local/v1/agent")
+    return sendJson(response, 200, { name: "Alpaca Agent", description: "Test-only local Agent" });
+  if (request.method === "GET" && url.pathname === "/api/local/v1/chat-sessions")
+    return sendJson(response, 200, { sessions: [], nextCursor: null });
+  if (request.method === "GET" && url.pathname === "/api/chat/model-providers")
+    return sendJson(response, 200, { schema_version: 1, catalog_digest: `sha256:${"0".repeat(64)}`, providers: [] });
   if (request.method === "GET" && url.pathname === "/v1/project-state/capabilities") {
     return sendJson(response, 200, { capabilities });
   }
