@@ -104,11 +104,8 @@ let accounts = [
     is_paper: true,
     account_is_active: true,
     unique_identifier: "PAPER__ALPACA",
-    credential_source: "external",
-    api_key_secret_name: "ALPACA_PAPER_API_KEY",
-    secret_key_secret_name: "ALPACA_PAPER_SECRET_KEY",
-    api_key_secret_uid: "secret-paper-api-key",
-    secret_key_secret_uid: "secret-paper-secret-key",
+    credential_source: "imported",
+    credentials_stored: true,
     credentials_updated_at: null,
     credentials_updated_by_user_uid: null,
     status: "ACTIVE",
@@ -207,12 +204,6 @@ const assets = [
     figi: null,
     composite_figi: null,
   },
-];
-const secretReferences = [
-  "ALPACA_LIVE_API_KEY",
-  "ALPACA_LIVE_SECRET_KEY",
-  "ALPACA_PAPER_API_KEY",
-  "ALPACA_PAPER_SECRET_KEY",
 ];
 let barConfigurations = [
   {
@@ -694,13 +685,6 @@ function accountValidationErrors(body, { allowed, required }) {
   return errors;
 }
 
-function managedSecretNames(uniqueIdentifier) {
-  return {
-    api_key_secret_name: `ALPACA_CONNECTORS__${uniqueIdentifier}__API_KEY`,
-    secret_key_secret_name: `ALPACA_CONNECTORS__${uniqueIdentifier}__SECRET_KEY`,
-  };
-}
-
 async function readJson(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
@@ -984,20 +968,6 @@ createServer(async (request, response) => {
       warnings_by_symbol: {},
     });
   }
-  if (request.method === "GET" && url.pathname === "/v1/accounts/secret-references") {
-    const search = (url.searchParams.get("search") ?? "").toLowerCase();
-    const matched = secretReferences.filter((name) => !search || name.toLowerCase().includes(search));
-    return sendJson(response, 200, {
-      items: matched.map((name) => ({ name })),
-      pageInfo: {
-        pageIndex: 0,
-        pageSize: Number(url.searchParams.get("limit") ?? 100),
-        totalItems: matched.length,
-        hasNextPage: false,
-        hasPreviousPage: false,
-      },
-    });
-  }
   if (request.method === "GET" && url.pathname === "/v1/accounts/discovery") {
     return sendJson(response, 200, {
       contract: "command-center.resource_discovery@v1",
@@ -1081,18 +1051,12 @@ createServer(async (request, response) => {
     if (errors.length) return sendJson(response, 422, { detail: errors });
     const uid = `account-${accounts.length + 1}`;
     const uniqueIdentifier = `${uid.toUpperCase()}__ALPACA_${body.environment.toUpperCase()}`;
-    const secretNames = managedSecretNames(uniqueIdentifier);
     return sendJson(response, 200, {
       account_unique_identifier: uniqueIdentifier,
       account_number: "PA0000000002",
       status: "ACTIVE",
       is_paper: body.environment === "paper",
       credential_source: "managed",
-      ...secretNames,
-      secret_writes: [
-        { name: secretNames.api_key_secret_name, action: "create" },
-        { name: secretNames.secret_key_secret_name, action: "create" },
-      ],
       equity: "100000",
       cash: "50000",
       would_write_holdings: 3,
@@ -1122,9 +1086,7 @@ createServer(async (request, response) => {
       is_paper: body.environment === "paper",
       account_is_active: true,
       credential_source: "managed",
-      ...managedSecretNames(uniqueIdentifier),
-      api_key_secret_uid: `secret-${uid}-api-key`,
-      secret_key_secret_uid: `secret-${uid}-secret-key`,
+      credentials_stored: true,
       credentials_updated_at: now,
       credentials_updated_by_user_uid: "user-e2e",
       status: "ACTIVE",
@@ -1222,13 +1184,10 @@ createServer(async (request, response) => {
       const { credentials, key_request_uid: _keyRequestUid, ...changes } = body;
       accounts[index] = { ...accounts[index], ...changes };
       if (credentials) {
-        const uid = accounts[index].uid;
         accounts[index] = {
           ...accounts[index],
           credential_source: "managed",
-          ...managedSecretNames(accounts[index].unique_identifier),
-          api_key_secret_uid: `secret-${uid}-api-key`,
-          secret_key_secret_uid: `secret-${uid}-secret-key`,
+          credentials_stored: true,
           credentials_updated_at: new Date().toISOString(),
           credentials_updated_by_user_uid: "user-e2e",
         };
@@ -1243,9 +1202,8 @@ createServer(async (request, response) => {
         registration_removed: true,
         account_deactivated: true,
         retained_holdings_sets: 0,
-        deleted_secrets: deleted.credential_source === "managed"
-          ? [deleted.api_key_secret_name, deleted.secret_key_secret_name]
-          : [],
+        // Keys are stored encrypted on the row (connector ADR 0017); nothing lives in Secrets.
+        deleted_secrets: [],
         warnings: [],
       });
     }

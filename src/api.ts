@@ -60,12 +60,14 @@ export interface Account {
   account_name: string;
   account_is_active: boolean;
   is_paper: boolean;
-  /** `managed`: Secrets created and owned by the API; `external`: existing Secrets it only reads. */
-  credential_source: "managed" | "external";
-  api_key_secret_name: string;
-  secret_key_secret_name: string;
-  api_key_secret_uid: string | null;
-  secret_key_secret_uid: string | null;
+  /**
+   * `managed`: keys a person entered through this site or the API; `imported`: keys copied once
+   * from Main Sequence Secrets selected by name; `external`: a registration made before the keys
+   * were stored encrypted, not migrated yet (connector ADR 0017).
+   */
+  credential_source: "managed" | "imported" | "external";
+  /** False only while a registration made before encrypted storage awaits the migration. */
+  credentials_stored: boolean;
   credentials_updated_at: string | null;
   credentials_updated_by_user_uid: string | null;
   status: string | null;
@@ -119,9 +121,9 @@ export interface Asset {
 }
 
 /**
- * Write-only Alpaca credential values. The API validates them against Alpaca and stores them as
- * application-managed Main Sequence Secrets; they are never returned. The site sends only this
- * `managed` shape.
+ * Write-only Alpaca credential values. The API validates them against Alpaca and stores them
+ * encrypted on the account row (connector ADR 0017); they are never returned. The site sends only
+ * this `managed` shape.
  */
 export interface ManagedAlpacaCredentials {
   source: "managed";
@@ -158,22 +160,13 @@ export interface AccountKeyRequestCollection {
   items: AccountKeyRequest[];
 }
 
-export interface AccountSecretWrite {
-  name: string;
-  action: "create" | "update";
-}
-
 /** Read-only registration dry run returned by the preflight endpoint; nothing is written. */
 export interface AccountRegistrationPreflightResponse {
   account_unique_identifier: string;
   account_number: string | null;
   status: string | null;
   is_paper: boolean;
-  credential_source: "managed" | "external";
-  /** Managed Secret names that registration would write. */
-  api_key_secret_name: string;
-  secret_key_secret_name: string;
-  secret_writes: AccountSecretWrite[];
+  credential_source: "managed" | "imported";
   equity: string | number | null;
   cash: string | number | null;
   would_write_holdings: number;
@@ -199,6 +192,7 @@ export interface AccountDeleteResponse {
   registration_removed: boolean;
   account_deactivated: boolean;
   retained_holdings_sets: number;
+  /** Main Sequence Secrets deleted with a registration made before encrypted storage; else empty. */
   deleted_secrets: string[];
   warnings: string[];
 }

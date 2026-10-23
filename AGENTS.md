@@ -33,9 +33,11 @@ This repository is the Command Center static-site application for the Alpaca Con
 - Assets: exact-symbol registration planning and execution, with polling of the API's
   persisted operation and ordered step status.
 - Accounts: create, list, update, and delete Alpaca registrations. Users type the Alpaca API key
-  and secret key; the API validates them and stores them as application-managed Main Sequence
-  Secrets (connector ADR 0011). Keep the values in component state only, clear them after use, and
-  never put them in a URL, browser storage, persisted view state, or logs.
+  and secret key; the API validates them and stores them encrypted on the account row (connector
+  ADR 0017, superseding the managed Secrets of ADR 0011). Responses carry `credential_source` and
+  `credentials_stored`, never a value or Secret name, and there is no Secret picker. Keep the
+  values in component state only, clear them after use, and never put them in a URL, browser
+  storage, persisted view state, or logs.
 - Agent key requests: the Accounts page lists the signed-in person's pending requests from the
   Alpaca Agent (`GET /v1/accounts/key-requests`, connector ADR 0015). Enter keys opens the
   registration or rotation form with the request's settings fixed and sends its `key_request_uid`
