@@ -85,10 +85,11 @@ duplicate registration, holdings extraction, Asset Universe Run behavior, or pla
 `asset_category_uid` remain explicit linked identities.
 Account registration and credential rotation send the Alpaca API key and secret key once, as
 write-only request fields (`credentials.source = "managed"`). The API validates them with Alpaca and
-stores them as Main Sequence Secrets it owns; account responses carry only the credential source,
-Secret names and UIDs, and the last update time, never values. The values live only in the open
-form's component state and are never placed in a URL, browser storage, persisted view state, or
-console output. The site does not call the Secret-reference endpoint.
+stores them encrypted on the account row (connector ADR 0017); account responses carry only the
+credential source, whether the keys are stored, and the last update time, never values or Secret
+names. The values live only in the open form's component state and are never placed in a URL,
+browser storage, persisted view state, or console output. The API has no Secret-reference
+endpoint and the site lists no Secrets.
 
 Asset registration uses the API's persisted operation contract. The initial `POST` returns `202`
 with an operation UID and ordered step states. The application polls the operation-specific `GET`

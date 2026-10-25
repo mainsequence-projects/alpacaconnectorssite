@@ -131,7 +131,7 @@ function buildAccountResource(transport: ApiTransport) {
     id: "alpaca-accounts",
     label: "Alpaca Accounts",
     itemLabel: "account",
-    description: "Registered brokerage accounts whose credentials are resolved from Main Sequence Secrets.",
+    description: "Registered brokerage accounts whose Alpaca keys the API stores encrypted.",
     getId: (account: Account) => account.uid,
     adapter,
     columns: [
@@ -361,15 +361,18 @@ function AccountHoldingsDetail({
               { key: "identifier", label: "Identifier", value: account.unique_identifier },
               { key: "last-refresh", label: "Last refresh", value: formatSnapshotTime(account.snapshot_time) },
             ],
-            // Secret names and timestamps only; credential values are never returned by the API.
+            // Source, storage state and timestamps only; key values are never returned by the API.
             highlight_fields: [
               {
                 key: "credential-source",
                 label: "Credentials",
                 value: credentialSourceLabel(account.credential_source),
               },
-              { key: "api-key-secret", label: "API key Secret", value: account.api_key_secret_name },
-              { key: "secret-key-secret", label: "Secret key Secret", value: account.secret_key_secret_name },
+              {
+                key: "credential-storage",
+                label: "Keys",
+                value: account.credentials_stored ? "Stored encrypted" : "Awaiting migration",
+              },
               {
                 key: "credentials-updated",
                 label: "Credentials updated",
@@ -409,7 +412,14 @@ function AccountHoldingsDetail({
 }
 
 function credentialSourceLabel(source: Account["credential_source"]): string {
-  return source === "managed" ? "Stored by this application" : "External Main Sequence Secrets";
+  switch (source) {
+    case "managed":
+      return "Stored by this application";
+    case "imported":
+      return "Imported from Main Sequence Secrets";
+    default:
+      return "Main Sequence Secrets, not migrated yet";
+  }
 }
 
 // Client-side checks only; the API validates the values against Alpaca before storing them.
@@ -552,22 +562,10 @@ function AccountRegistrationReview({ plan }: { plan: AccountRegistrationPrefligh
       <ReviewValueList label="Alpaca assets to register" values={plan.alpaca_asset_ids_to_register} />
       <ReviewValueList label="Cash assets to ensure" values={plan.cash_asset_identifiers_to_ensure} />
       <div className="result-group">
-        <h4>Credential Secrets to store</h4>
-        {plan.secret_writes.length ? (
-          <dl className="summary-list summary-list--single-column">
-            {plan.secret_writes.map((write) => (
-              <div key={write.name}>
-                <dt>{write.action === "create" ? "Create" : "Update"}</dt>
-                <dd>{write.name}</dd>
-              </div>
-            ))}
-          </dl>
-        ) : (
-          <p className="form-note">None.</p>
-        )}
+        <h4>Key storage</h4>
         <p className="form-note">
-          The review writes nothing. The keys are stored in these Main Sequence Secrets only when
-          the account is registered.
+          The review writes nothing. The keys are stored encrypted on the account only when the
+          account is registered, and this application never displays them again.
         </p>
       </div>
       {blocked ? (
@@ -616,7 +614,7 @@ function PendingKeyRequests({
     >
       <p className="form-note">
         Your Alpaca Agent asked you to enter Alpaca API keys. Enter them here, never in the
-        conversation; the API checks them with Alpaca and stores them as Main Sequence Secrets.
+        conversation; the API checks them with Alpaca and stores them encrypted.
       </p>
       <ul className="key-request-list" aria-label="Pending key requests">
         {requests.map((request) => (
@@ -944,7 +942,10 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
     }
   }
 
-  const deletingManagedAccount = deleteTarget?.credential_source === "managed";
+  // Only a registration made before encrypted storage still owns Main Sequence Secrets.
+  const deletingLegacySecrets = deleteTarget !== null
+    && deleteTarget.credential_source === "managed"
+    && !deleteTarget.credentials_stored;
 
   return (
     <ApplicationPage as="main" maxWidth="full">
@@ -952,7 +953,7 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
         <ApplicationPageHeader
           eyebrow="Accounts"
           title="Alpaca account registrations"
-          description="Register and maintain brokerage accounts with their Alpaca API keys. The API checks the keys with Alpaca and stores them as Main Sequence Secrets."
+          description="Register and maintain brokerage accounts with their Alpaca API keys. The API checks the keys with Alpaca and stores them encrypted on the account."
         />
 
         {formOpen ? null : (
@@ -1027,9 +1028,9 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
                     <p>
                       Leave both fields empty to keep the current credentials. New keys must
                       authenticate as the same Alpaca account and replace the stored values.
-                      {editing.credential_source === "external"
-                        ? " This account uses external Main Sequence Secrets; rotating stores the new keys in Secrets owned by this application and leaves the external Secrets unchanged."
-                        : null}
+                      {editing.credentials_stored
+                        ? null
+                        : " This account's keys still live in Main Sequence Secrets; rotating stores the new keys encrypted on the account and leaves Secrets this application did not create unchanged."}
                     </p>
                   </div>
                   <div className="form-grid">
@@ -1095,7 +1096,7 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
             <div className="workflow-guidance">
               <ShieldCheck aria-hidden="true" size={18} />
               <p>
-                The API key and secret key are sent to the Alpaca Connectors API over the authenticated connection, checked with Alpaca, and stored as Main Sequence Secrets. They are never saved in this browser, and this application never displays them again.
+                The API key and secret key are sent to the Alpaca Connectors API over the authenticated connection, checked with Alpaca, and stored encrypted on the account. They are never saved in this browser, and this application never displays them again.
               </p>
             </div>
             </form>
@@ -1158,12 +1159,10 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
         actionLabel="Delete"
         title="Remove account registration"
         selectionLabel={deleteTarget?.account_name ?? "account"}
-        description={deletingManagedAccount
-          ? "Remove this Alpaca registration, deactivate the account, and delete its stored credentials (the Main Sequence Secrets this application created for its API key and secret key)."
-          : "Remove this Alpaca registration and deactivate the account. The external Main Sequence Secrets it references are kept."}
-        warning={deletingManagedAccount
-          ? "The stored credentials cannot be recovered; registering the account again requires its keys. Historical holdings snapshots are retained. Configurations that reference this account can no longer run."
-          : "Historical holdings snapshots are retained. Configurations that reference this account can no longer run."}
+        description={deletingLegacySecrets
+          ? "Remove this Alpaca registration, deactivate the account, and delete the Main Sequence Secrets this application created for its API key and secret key."
+          : "Remove this Alpaca registration, deactivate the account, and delete its stored keys. Main Sequence Secrets the account was imported from are kept."}
+        warning="The stored credentials cannot be recovered; registering the account again requires its keys. Historical holdings snapshots are retained. Configurations that reference this account can no longer run."
         confirmationWord="DELETE"
         confirmationValue={deleteConfirmation}
         onConfirmationValueChange={setDeleteConfirmation}

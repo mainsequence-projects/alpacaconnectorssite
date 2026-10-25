@@ -8,7 +8,7 @@ The Alpaca Connectors command center currently has seven workflow pages. Portfol
 is grouped into three sibling applications under **Portfolios**:
 
 - **Assets** plans and executes provider-native Alpaca asset registration, with optional OpenFIGI enrichment.
-- **Accounts** registers and maintains Alpaca accounts from their API keys, which the API stores as Main Sequence Secrets.
+- **Accounts** registers and maintains Alpaca accounts from their API keys, which the API stores encrypted on the account.
 - **Universes** creates explicit Asset Universe registrations and Runs their linked sources.
 - **Bars** creates and maintains reusable Alpaca stock-bar configurations.
 - **ETF Weight Signals** creates and operates Universe-backed ETF signals, which the connector's shared signal Job runs daily.

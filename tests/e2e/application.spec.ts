@@ -125,9 +125,8 @@ test("registers an account from Alpaca keys after a preflight review", async ({ 
   await expect(review.getByText("Live", { exact: true })).toBeVisible();
   await expect(review.getByText("22222222-2222-4222-8222-222222222222", { exact: true })).toBeVisible();
   await expect(review.getByText("USD", { exact: true })).toBeVisible();
-  await expect(review.getByText(/^ALPACA_CONNECTORS__ACCOUNT-\d+__ALPACA_LIVE__API_KEY$/)).toBeVisible();
-  await expect(review.getByText(/^ALPACA_CONNECTORS__ACCOUNT-\d+__ALPACA_LIVE__SECRET_KEY$/)).toBeVisible();
-  await expect(review.getByText("Create", { exact: true })).toHaveCount(2);
+  await expect(review.getByText("Key storage", { exact: true })).toBeVisible();
+  await expect(review.getByText(/ALPACA_CONNECTORS__/)).toHaveCount(0);
   await expect(confirmRegistration).toBeEnabled();
   expect(accountWrites).toEqual([
     { method: "POST", path: "/v1/accounts/registration/preflight", body: registrationBody },
@@ -228,22 +227,20 @@ test("edits, rotates, inspects, and removes a managed account", async ({ page, r
   await row.getByText("Rotation desk renamed", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Rotation desk renamed" })).toBeVisible();
   await expect(page.getByText("Stored by this application", { exact: true })).toBeVisible();
-  await expect(page.getByText(`ALPACA_CONNECTORS__${created.unique_identifier}__API_KEY`, { exact: true })).toBeVisible();
-  await expect(page.getByText(`ALPACA_CONNECTORS__${created.unique_identifier}__SECRET_KEY`, { exact: true })).toBeVisible();
+  await expect(page.getByText("Stored encrypted", { exact: true })).toBeVisible();
+  await expect(page.getByText(`ALPACA_CONNECTORS__${created.unique_identifier}__API_KEY`, { exact: true })).toHaveCount(0);
   await expect(page.getByText("Credentials updated", { exact: true })).toBeVisible();
   await expect(page.getByText(ROTATED_API_KEY)).toHaveCount(0);
   await page.getByRole("button", { name: "Back to accounts" }).click();
 
   await row.getByRole("button", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog", { name: "Remove account registration" });
-  await expect(dialog).toContainText("delete its stored credentials");
+  await expect(dialog).toContainText("delete its stored keys");
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(row).toHaveCount(0);
-  await expect(page.getByText(
-    `Deleted stored credential Secrets: ALPACA_CONNECTORS__${created.unique_identifier}__API_KEY`,
-    { exact: false },
-  )).toBeVisible();
+  await expect(page.getByText("Removed Rotation desk renamed.", { exact: false })).toBeVisible();
+  await expect(page.getByText("Deleted stored credential Secrets", { exact: false })).toHaveCount(0);
   expectNoCredentialLeak(requestUrls, [ROTATED_API_KEY, ROTATED_SECRET_KEY]);
 });
 
@@ -303,12 +300,6 @@ test("blocks registration when the review reports unresolved holdings", async ({
         status: "ACTIVE",
         is_paper: true,
         credential_source: "managed",
-        api_key_secret_name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__API_KEY",
-        secret_key_secret_name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__SECRET_KEY",
-        secret_writes: [
-          { name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__API_KEY", action: "update" },
-          { name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__SECRET_KEY", action: "update" },
-        ],
         equity: "1000",
         cash: "0",
         would_write_holdings: 1,
@@ -331,7 +322,6 @@ test("blocks registration when the review reports unresolved holdings", async ({
   await expect(review.getByText("Blocked", { exact: true })).toBeVisible();
   await expect(review.getByText("33333333-3333-4333-8333-333333333333", { exact: true })).toBeVisible();
   await expect(review.getByText("None.", { exact: true })).toHaveCount(2);
-  await expect(review.getByText("Update", { exact: true })).toHaveCount(2);
   await expect(registrationForm.getByRole("button", { name: "Register account" })).toBeDisabled();
   await assertCommandCenterPageLayout(page);
   expect(registrationRequests).toHaveLength(0);
@@ -352,9 +342,9 @@ test("loads only the selected account's latest holdings after row activation", a
   await accountRow.getByText("Paper account", { exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "Paper account" })).toBeVisible();
-  await expect(page.getByText("External Main Sequence Secrets", { exact: true })).toBeVisible();
-  await expect(page.getByText("ALPACA_PAPER_API_KEY", { exact: true })).toBeVisible();
-  await expect(page.getByText("ALPACA_PAPER_SECRET_KEY", { exact: true })).toBeVisible();
+  await expect(page.getByText("Imported from Main Sequence Secrets", { exact: true })).toBeVisible();
+  await expect(page.getByText("Stored encrypted", { exact: true })).toBeVisible();
+  await expect(page.getByText("ALPACA_PAPER_API_KEY", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Not recorded", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Latest holdings" })).toBeVisible();
   await expect(page.getByRole("row", { name: /AAPL/ })).toContainText("125");

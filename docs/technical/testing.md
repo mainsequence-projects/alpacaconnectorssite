@@ -16,7 +16,7 @@ directory.
 
 `npm run test:e2e` builds in the explicit test mode and uses a cross-origin host fixture. The
 browser suite checks the direct development transport, asset and universe flows, account review,
-registration, credential rotation, and removal with API-managed credential Secrets,
+registration, credential rotation, and removal with keys stored encrypted by the API,
 bars-configuration CRUD, signal CRUD and run actions, portfolio and rebalance create and edit, the
 signal and portfolio scheduled-run toggles (signal pause and resume actions, portfolio
 `PATCH {scheduled}`) with the shared Job's schedule shown read-only, the iframe handshake,
