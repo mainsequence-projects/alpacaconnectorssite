@@ -22,22 +22,12 @@
           "items": []
         },
         {
-          "label": "Universes",
-          "doc": "surfaces/universes",
-          "items": []
-        },
-        {
           "label": "Bars",
           "doc": "surfaces/bars",
           "items": []
         },
         {
-          "label": "Signals",
-          "doc": "surfaces/signals",
-          "items": []
-        },
-        {
-          "label": "ETF Portfolios",
+          "label": "Portfolios",
           "doc": "surfaces/portfolios",
           "items": []
         }

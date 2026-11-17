@@ -1,37 +1,43 @@
-# ETF Portfolios
+# Portfolios
 
-The **Portfolios** navigation group contains three sibling applications:
+The **Portfolios** navigation group contains two sibling applications:
 
-- **ETF Weight Signals** operates the remaining observed ETF-weight producers;
 - **Rebalance Configurations** maintains reusable calendar-event rebalance policies; and
-- **ETF Portfolios** lists, inspects, runs, and deletes analytical portfolios.
+- **Portfolios** lists, inspects, and runs the connector's portfolios, and lets a portfolio's
+  owner pause, resume, or delete it.
 
-The ETF Portfolios application opens directly on the portfolio list. ETF portfolios are being
-retired: the connector keeps only portfolios built from weights an application provides, and
-creating those is the application's capability, so the page has no create or edit form. The
-remaining ETF portfolios stay available until each Environment has been drained of them.
+The connector keeps only portfolios built from weights an application provides (connector
+ADR 0024). Creating a portfolio and giving it weights are the application's capabilities, so the
+site never offers them: the Portfolios application opens directly on the portfolio list and has no
+create or edit form.
 
-Each configuration composes:
+Each portfolio composes:
 
-- an ETF Weight Signal Configuration, or the weights an application provides (connector ADR 0024);
-- one enabled Alpaca Bars Configuration;
+- the weights an application provides;
+- one enabled Alpaca Bars Configuration, its valuation source;
 - one reusable Rebalance Configuration;
 - persistent daily `InterpolatedPrices` using forward-fill interpolation;
 - the valuation column, maximum price staleness, missing-price policy, and commission fee; and
 - whether the shared portfolio Job's daily scheduled run includes it.
 
 The GUI does not expose an Environment selector. The CodeRepositoryBranch runtime resolves its
-Organization Environment. Each run selects its configuration with `--configuration-uid <uid>`.
+Organization Environment. Each run selects its portfolio with `--configuration-uid <uid>`.
 
 ## Ownership
 
-The Portfolio Configuration is the source of truth for calculation intent and for its scheduled
-flag. It does not copy the selected Signal's Universe or Account, the Bars Configuration's source
-table, or any Job schedule, compute, image, or deployment field.
+A portfolio belongs to the caller that created it. Only its owner can change, pause, resume, or
+delete it; the connector answers anyone else `403`, and the site then reads **Only the
+portfolio's owner can do this.** Anyone who can open the site can list, inspect, and run every
+portfolio. The connector never names a portfolio's owner, so the site shows the owner's actions on
+every portfolio and lets the connector decide.
 
-The connector runs every portfolio on one shared portfolio Job, `Alpaca ETF Portfolio`. Its
-workflow file declares the execution path, the daily schedule (02:00 UTC), CPU, memory, maximum
-runtime, spot preference, and automatic deployment. A JobRun contains execution history only.
+The portfolio is the source of truth for calculation intent and for its scheduled flag. It does not
+copy the Bars Configuration's source table or any Job schedule, compute, image, or deployment
+field.
+
+The connector runs every portfolio on one shared portfolio Job. Its workflow file declares the
+execution path, the daily schedule (02:00 UTC), CPU, memory, maximum runtime, spot preference, and
+automatic deployment. A JobRun contains execution history only.
 
 The details page shows the shared Job's schedule, timezone, resources, and image read-only, and
 whether the portfolio is included in the scheduled run. **Pause** and **Resume** send
@@ -46,8 +52,8 @@ valuation-source observation:
 
 - **Maximum price staleness** bounds how old that price may be; the details page shows it as a
   duration with its seconds (the connector's default, `86400`, is one day). Alignment never creates
-  timestamps, extends the portfolio to the current time, or changes signal validity, so there is no
-  option to extend prices to now.
+  timestamps, extends the portfolio to the current time, or changes when weights apply, so there is
+  no option to extend prices to now.
 - The **missing-price policy** decides what happens when a required asset, one the portfolio holds,
   enters, or exits, has no price within that bound: either the run stops and reports the asset, or
   the valuation is attempted without that price; no price is invented, and the run may still fail
@@ -60,8 +66,8 @@ the rebalance calendar, so daily valuation observations follow the configured ex
 
 Open **Rebalance Configurations** directly from the **Portfolios** navigation group to create,
 edit, or delete reusable policies. The only strategy is `CalendarEventSignal`: at each selected
-persisted calendar event it executes the latest ETF weights observed at or before that event. A
-signal observed after the event first becomes eligible at the next one, and early closes use their
+persisted calendar event it executes the portfolio's latest weights given at or before that event.
+Weights given after the event first become eligible at the next one, and early closes use their
 actual persisted close times.
 
 Alpaca trades US equities, so new policies use the persisted `NYSE` calendar's `regular` session;
@@ -96,33 +102,35 @@ of the connector's rebalance request model:
 
 The list shows each policy's calendar, market event with its offset, and cadence.
 
-This is a calendar-executed reconstruction. ETF Weight Signal timestamps record when holdings were
-observed; they do not guarantee exact economic effective time. The backtest does not model
-execution latency, partial fills, volume participation, market impact, or slippage beyond the
-configured commission fee.
+This is a calendar-executed reconstruction. The backtest does not model execution latency, partial
+fills, volume participation, market impact, or slippage beyond the configured commission fee.
 
 ## Running and inspecting
 
 Use **Run now** only after the shared Job image is ready; it works whether or not the portfolio is
 paused. The connector refuses a run while the portfolio's previous run is still pending or running,
-or while its preflight is blocked: a run requires existing, enabled linked configurations and a
-signal with published observations, plus source bars for the signal Assets and the migrated
-persistent interpolation storage. The portfolio run updates interpolation and calculates the
-ms-markets portfolio without rerunning the signal or raw-bars producers.
+or while its preflight is blocked: a run requires existing, enabled linked configurations and
+weights, plus source bars for the weighted assets and the migrated persistent interpolation
+storage. The portfolio run updates interpolation and calculates the ms-markets portfolio without
+rerunning the raw-bars producer.
 
-Select a row to load its business-facing detail on demand. The detail resolves the linked Signal,
-Universe, and runtime account of an ETF portfolio, or, for a portfolio built from provided weights,
-how many assets its weights cover and when it was first and last given weights. It also resolves
-the Bars scope and profile, Rebalance policy with its calendar, event, and cadence, the maximum
-price staleness, the shared Job's settings, and the canonical portfolio calendar without exposing
-their internal UIDs. It also queries up to the latest
-2,500 canonical daily values and renders portfolio value and drawdown history. No observation query
-is made for portfolios that the user has not opened.
+Select a row to load its business-facing detail on demand. The detail shows how many assets the
+portfolio's weights cover and when it was first and last given weights, the Bars scope and profile,
+the Rebalance policy with its calendar, event, and cadence, the maximum price staleness, the shared
+Job's settings, and the canonical portfolio calendar, without exposing their internal UIDs. It also
+queries up to the latest 2,500 canonical daily values and renders portfolio value and drawdown
+history. No observation query is made for portfolios that the user has not opened.
 
 The performance panel provides a quick, window-scoped review rather than a separate portfolio
 analytics application. The API uses `empyrical-reloaded` to calculate total and annualized return,
 annualized volatility, Sharpe, Sortino, maximum drawdown, Calmar, best/worst daily return, and the
 positive-period ratio. The panel states the 252-period annualization and 0% risk-free-rate
 assumptions, shows the exact statistics window, and marks a bounded result when more history exists.
-Alpha and beta are omitted because no benchmark is configured. Delete removes only the durable
-configuration; already-published portfolio observations and the shared Job's past runs remain.
+Alpha and beta are omitted because no benchmark is configured.
+
+## Deleting
+
+**Delete** is the owner's. The connector retires the portfolio rather than erasing it: it stops
+running, and its published values and weights remain as its record, as do the shared Job's past
+runs. An account whose target still holds the portfolio blocks the deletion until the account
+drops it.

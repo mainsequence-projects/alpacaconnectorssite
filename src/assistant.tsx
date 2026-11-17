@@ -33,7 +33,7 @@ const VIEW_CONTEXT = { application: "alpaca-connectors" } as const;
 const COPY: Partial<ChatThreadCopy> = {
   emptyTitle: "Ask the Alpaca Agent",
   emptyDescription:
-    "Ask about your Alpaca accounts, assets, universes, signals and portfolios. The Agent never takes your Alpaca keys: it sends you to the Accounts page to enter them.",
+    "Ask about your Alpaca accounts, assets, market data and portfolios. The Agent never takes your Alpaca keys: it sends you to the Accounts page to enter them.",
   composerPlaceholder: "Ask the Alpaca Agent…",
   sessionUnavailableTitle: "The Alpaca Agent is unavailable",
   disclaimer: "The Alpaca Agent can make mistakes. Verify important outputs before acting.",

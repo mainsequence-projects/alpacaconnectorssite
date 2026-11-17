@@ -3,17 +3,12 @@ export const API_ENDPOINTS = {
   assets: "/v1/assets",
   assetDiscovery: "/v1/assets/discovery",
   assetRegistrationOperations: "/v1/assets/registration/operations",
-  universeSources: "/v1/universe-sources",
-  universes: "/v1/universes",
-  universeDiscovery: "/v1/universes/discovery",
   accounts: "/v1/accounts",
   accountDiscovery: "/v1/accounts/discovery",
   accountRegistrationPreflight: "/v1/accounts/registration/preflight",
   accountKeyRequests: "/v1/accounts/key-requests",
   barConfigurations: "/v1/market-data/bar-configurations",
   barConfigurationDiscovery: "/v1/market-data/bar-configurations/discovery",
-  signalJobs: "/v1/signal-jobs",
-  signalJobDiscovery: "/v1/signal-jobs/discovery",
   portfolioConfigurations: "/v1/portfolio-configurations",
   portfolioConfigurationDiscovery: "/v1/portfolio-configurations/discovery",
   portfolioRebalanceConfigurations: "/v1/portfolio-rebalance-configurations",
@@ -28,18 +23,8 @@ export function accountKeyRequestCancelPath(keyRequestUid: string): string {
   return `${API_ENDPOINTS.accountKeyRequests}/${encodeURIComponent(keyRequestUid)}/actions/cancel`;
 }
 
-export function universeSourcePreviewPath(sourceUid: string): string {
-  return `${API_ENDPOINTS.universeSources}/${encodeURIComponent(sourceUid)}/actions/preview`;
-}
-
-export function signalObservationsPath(configurationUid: string, limit = 100): string {
-  return `${API_ENDPOINTS.signalJobs}/${encodeURIComponent(configurationUid)}/observations?limit=${limit}`;
-}
-
 export interface ProjectConfigurationResponse {
-  supported_component_providers: string[];
   migrated_market_data_profiles: string[];
-  universe_sources_are_user_managed: boolean;
   /** When `agent_uid` is set, that Agent's own Environment (connector `docs/api.md`). */
   organization_environment_uid: string | null;
   organization_environment_name: string | null;
@@ -265,20 +250,6 @@ export interface AssetRegistrationOperationStartRequest {
   request: AssetRegistrationRequest;
 }
 
-export interface UniverseSourceActionRequest {
-  timeout: number;
-}
-
-export interface UniverseSource {
-  uid: string;
-  name: string;
-  symbol: string;
-  source_url: string;
-  enabled: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface ResourcePageInfo {
   pageIndex: number;
   pageSize: number;
@@ -292,38 +263,11 @@ export interface ResourceCollection<T> {
   pageInfo: ResourcePageInfo;
 }
 
-export interface UniverseSourcePreviewResponse {
-  source: UniverseSource;
-  plan_summary: Record<string, unknown>;
-  has_blockers: boolean;
-}
-
-export interface AssetUniverse {
-  uid: string;
-  source_uid: string;
-  asset_category_uid: string;
-  display_name: string;
-  symbol: string;
-  source_url: string;
-  description: string | null;
-  is_active: boolean;
-  asset_count: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface AssetCategorySummary {
-  uid: string;
-  unique_identifier: string;
-  display_name: string;
-  description: string | null;
-}
-
-export interface AssetUniverseDetail extends AssetUniverse {
-  asset_category: AssetCategorySummary;
-}
-
-export type BarConfigurationAssetSource = "assets" | "universe" | "account_holdings";
+/**
+ * Where a bars configuration takes its assets: explicit registered Asset UIDs, the account's latest
+ * holdings, or every asset of the live portfolios valued with it.
+ */
+export type BarConfigurationAssetSource = "assets" | "account_holdings" | "portfolios";
 
 export interface BarConfiguration {
   uid: string;
@@ -333,7 +277,6 @@ export interface BarConfiguration {
   account_uid: string;
   asset_source: BarConfigurationAssetSource;
   asset_uids: string[];
-  universe_uid: string | null;
   frequency_id: string;
   feed: string;
   adjustment: string;
@@ -341,6 +284,7 @@ export interface BarConfiguration {
   updated_at: string;
 }
 
+/** Create body, also sent whole as the edit PATCH; the API rejects any other field. */
 export interface BarConfigurationWriteRequest {
   name: string;
   description: string | null;
@@ -348,7 +292,6 @@ export interface BarConfigurationWriteRequest {
   account_uid: string;
   asset_source: BarConfigurationAssetSource;
   asset_uids: string[];
-  universe_uid: string | null;
   frequency_id: string;
   feed: string;
   adjustment: string;
@@ -392,25 +335,8 @@ export function formatSharedJobSchedule(job: ConfigurationJob | null): string {
   return "No schedule";
 }
 
-export interface SignalJobConfiguration {
-  uid: string;
-  name: string;
-  description: string | null;
-  signal_uid: string;
-  universe_uid: string;
-  account_uid: string;
-  /** Whether the shared signal Job's daily scheduled run includes this configuration. */
-  scheduled: boolean;
-  job_uid: string | null;
-  job: ConfigurationJob | null;
-  lifecycle_state: "provisioning" | "ready" | "paused";
-  latest_run_status: string | null;
-  latest_run_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface SignalJobRunAccepted {
+/** The shared portfolio Job's answer to `POST .../actions/run`: the JobRun it started. */
+export interface PortfolioJobRunAccepted {
   configuration_uid: string;
   job_uid: string;
   job_run_uid: string;
@@ -419,42 +345,9 @@ export interface SignalJobRunAccepted {
   poll_after_ms: number;
 }
 
-export interface SignalJobRun {
-  uid: string;
-  job_uid: string;
-  job_name: string;
-  /** The configuration the run's `--configuration-uid` argument selects; null for the scheduled run. */
-  configuration_uid: string | null;
-  status: string;
-  execution_start: string | null;
-  execution_end: string | null;
-  commit_hash: string | null;
-  runtime_image_uid: string | null;
-  runtime_image_digest: string | null;
-  command_args: string[];
-  logs_url: string | null;
-  failure_message: string | null;
-}
-
-export interface SignalObservationAsset {
-  asset_identifier: string;
-  symbol: string | null;
-  name: string | null;
-  weights: Array<number | null>;
-}
-
-export interface SignalObservations {
-  configuration_uid: string;
-  signal_uid: string;
-  observation_count: number;
-  asset_count: number;
-  time_indexes: string[];
-  assets: SignalObservationAsset[];
-}
-
 /**
  * The connector's only rebalance strategy (connector ADR 0009): at each selected persisted
- * calendar event it executes the latest signal observed at or before that event.
+ * calendar event it executes the portfolio's latest weights given at or before that event.
  */
 export type PortfolioRebalanceStrategy = "calendar_event_signal";
 export type PortfolioRebalanceEvent = "market_open" | "market_close";
@@ -497,13 +390,14 @@ export interface PortfolioRebalanceConfigurationWriteRequest extends PortfolioRe
   strategy: PortfolioRebalanceStrategy;
 }
 
+/**
+ * A portfolio built from weights an application provides (connector ADR 0024). Only its owner, the
+ * caller that created it, may change, pause, or delete it; the API answers anyone else 403.
+ */
 export interface PortfolioConfiguration {
   uid: string;
   name: string;
   description: string | null;
-  /** Null for a portfolio built from weights an application provides (connector ADR 0024). */
-  signal_configuration_uid: string | null;
-  signal_uid: string;
   bars_configuration_uid: string;
   rebalance_configuration_uid: string;
   rebalance_strategy: PortfolioRebalanceStrategy;
@@ -525,23 +419,13 @@ export interface PortfolioConfiguration {
   updated_at: string;
 }
 
-export interface PortfolioLinkedSignal {
-  name: string;
-  description: string | null;
-  scheduled: boolean;
-  universe_name: string;
-  universe_symbol: string;
-  account_name: string;
-  account_environment: "paper" | "live";
-}
-
 export interface PortfolioLinkedBars {
   name: string;
   description: string | null;
   enabled: boolean;
   account_name: string;
   account_environment: "paper" | "live";
-  asset_source: "assets" | "universe" | "account_holdings";
+  asset_source: BarConfigurationAssetSource;
   asset_source_name: string;
   asset_count: number | null;
   frequency_id: string;
@@ -605,24 +489,19 @@ export interface CanonicalPortfolioDetail {
   observations: PortfolioValueObservation[];
 }
 
-/** The weights of a portfolio built from weights an application provides (connector ADR 0024). */
+/** The weights the application has given the portfolio so far. */
 export interface PortfolioProvidedWeights {
   first_observation_at: string | null;
   last_observation_at: string | null;
   asset_count: number;
 }
 
-/** An ETF portfolio has `linked_signal`; a portfolio built from provided weights has `provided_weights`. */
 export interface PortfolioConfigurationDetail extends PortfolioConfiguration {
-  linked_signal: PortfolioLinkedSignal | null;
-  provided_weights?: PortfolioProvidedWeights | null;
+  provided_weights: PortfolioProvidedWeights | null;
   linked_bars: PortfolioLinkedBars;
   linked_rebalance: PortfolioLinkedRebalance;
   canonical_portfolio: CanonicalPortfolioDetail;
 }
-
-export type PortfolioJobRunAccepted = SignalJobRunAccepted;
-export type PortfolioJobRun = SignalJobRun;
 
 export interface ApiTransport {
   request<T>(path: string, init?: RequestInit): Promise<T>;
@@ -722,8 +601,9 @@ export async function loadProjectConfiguration(
   const api = createApiClient(transport);
   const configuration = await api.get<ProjectConfigurationResponse>(API_ENDPOINTS.configuration, signal);
 
-  if (!Array.isArray(configuration.supported_component_providers)) {
-    throw new Error("The API returned an invalid provider-configuration response.");
+  // The Bars form's profiles are the one field the site needs; the API's other fields come and go.
+  if (!Array.isArray(configuration.migrated_market_data_profiles)) {
+    throw new Error("The API returned an invalid project configuration.");
   }
 
   return configuration;

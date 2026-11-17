@@ -13,7 +13,7 @@ import {
   ResourcePicker,
   type ResourcePickerOption,
 } from "@dev-mainsequence/command-center-sdk/views";
-import { Activity, BookOpen, BriefcaseBusiness, ChartCandlestick, Landmark, Layers3, PackageSearch, Repeat2 } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, ChartCandlestick, Landmark, PackageSearch, Repeat2 } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -38,10 +38,8 @@ import { AssetResourceList } from "./assetResource";
 import { BarsConfigurationsPage } from "./barConfigurations";
 import { PortfoliosPage } from "./portfolios";
 import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
-import { SignalsPage } from "./signals";
-import { UniverseResourceList } from "./universeResource";
 
-type RouteId = "assets" | "accounts" | "universes" | "bars" | "signals" | "rebalances" | "portfolios";
+type RouteId = "assets" | "accounts" | "bars" | "rebalances" | "portfolios";
 const ASSET_OPERATION_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 type ActionState<T> =
   | { state: "idle" }
@@ -52,9 +50,7 @@ type ActionState<T> =
 const ROUTE_PATHS: Record<RouteId, string> = {
   assets: "/assets",
   accounts: "/accounts",
-  universes: "/universes",
   bars: "/bars",
-  signals: "/signals",
   rebalances: "/rebalance-configurations",
   portfolios: "/portfolios",
 };
@@ -66,7 +62,7 @@ function AlpacaNavigationIcon({ className }: { className?: string }) {
 const NAVIGATION: NavigationApplicationDefinition = {
   id: "alpaca-connectors",
   label: "Alpaca Connectors",
-  description: "Asset registration and ETF holdings universes",
+  description: "Alpaca assets, accounts, market data, and portfolios",
   icon: AlpacaNavigationIcon,
   href: "/assets",
   defaultDestinationId: "assets",
@@ -84,13 +80,6 @@ const NAVIGATION: NavigationApplicationDefinition = {
           description: "Register accounts with their Alpaca API keys",
         },
         {
-          id: "universes",
-          label: "Universes",
-          href: "/universes",
-          icon: Layers3,
-          description: "Run and delete ETF holdings universes",
-        },
-        {
           id: "bars",
           label: "Bars",
           href: "/bars",
@@ -104,13 +93,6 @@ const NAVIGATION: NavigationApplicationDefinition = {
       label: "Portfolios",
       destinations: [
         {
-          id: "signals",
-          label: "ETF Weight Signals",
-          href: "/signals",
-          icon: Activity,
-          description: "Run and delete Universe-backed ETF signals",
-        },
-        {
           id: "rebalances",
           label: "Rebalance Configurations",
           href: "/rebalance-configurations",
@@ -119,10 +101,10 @@ const NAVIGATION: NavigationApplicationDefinition = {
         },
         {
           id: "portfolios",
-          label: "ETF Portfolios",
+          label: "Portfolios",
           href: "/portfolios",
           icon: BriefcaseBusiness,
-          description: "Inspect, run, and delete analytical portfolios",
+          description: "Inspect and run portfolios built from provided weights",
         },
       ],
     },
@@ -144,9 +126,7 @@ const NAVIGATION: NavigationApplicationDefinition = {
 
 function routeFromPath(pathname: string): RouteId {
   if (pathname.startsWith("/accounts")) return "accounts";
-  if (pathname.startsWith("/universes")) return "universes";
   if (pathname.startsWith("/bars")) return "bars";
-  if (pathname.startsWith("/signals")) return "signals";
   if (pathname.startsWith("/rebalance-configurations")) return "rebalances";
   if (pathname.startsWith("/portfolios")) return "portfolios";
   return "assets";
@@ -549,21 +529,6 @@ function AssetsPage({ transport }: { transport: ApiTransport }) {
   );
 }
 
-function UniversesPage({ transport }: { transport: ApiTransport }) {
-  return (
-    <ApplicationPage as="main" maxWidth="full">
-      <ApplicationPageStack>
-        <ApplicationPageHeader
-          eyebrow="Universes"
-          title="Manage ETF holdings universes"
-          description="ETF holdings universes are being retired: new universes can no longer be created. Inspect, extract the components of, or delete the registered ones."
-        />
-        <UniverseResourceList transport={transport} refreshKey={0} />
-      </ApplicationPageStack>
-    </ApplicationPage>
-  );
-}
-
 export default function App() {
   const transportState = useAlpacaApiTransport();
   // The Alpaca Agent and its Environment, from the API's configuration on page load; never the build.
@@ -592,7 +557,7 @@ export default function App() {
 
   useEffect(() => {
     if (!transportState.transport) return;
-    if (route !== "assets" && route !== "bars" && route !== "signals") {
+    if (route !== "assets" && route !== "bars") {
       setConfigurationLoading(false);
       setConfigurationError(null);
       return;
@@ -674,14 +639,10 @@ export default function App() {
             transport={transportState.transport}
             configuration={configuration}
           />
-        ) : route === "signals" ? (
-          <SignalsPage transport={transportState.transport} />
         ) : route === "rebalances" ? (
           <PortfoliosPage key="rebalances" transport={transportState.transport} section="rebalances" />
-        ) : route === "portfolios" ? (
-          <PortfoliosPage key="portfolios" transport={transportState.transport} />
         ) : (
-          <UniversesPage transport={transportState.transport} />
+          <PortfoliosPage key="portfolios" transport={transportState.transport} />
         )}
       </div>
       <DockedAlpacaAgentRail />

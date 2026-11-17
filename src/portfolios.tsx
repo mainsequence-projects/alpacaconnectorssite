@@ -35,6 +35,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   API_ENDPOINTS,
+  ApiResponseError,
   createApiClient,
   formatSharedJobSchedule,
   US_EQUITY_REBALANCE_CALENDAR,
@@ -292,6 +293,15 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : "The request failed unexpectedly.";
 }
 
+/**
+ * Pausing, resuming, and deleting a portfolio are its owner's: the API answers anyone else 403,
+ * and the site says so in the person's words rather than the API's.
+ */
+function formatOwnerActionError(error: unknown): string {
+  if (error instanceof ApiResponseError && error.status === 403) return "Only the portfolio's owner can do this.";
+  return formatError(error);
+}
+
 function withQuery(path: string, query?: Readonly<Record<string, unknown>>): string {
   const parameters = new URLSearchParams();
   Object.entries(query ?? {}).forEach(([key, value]) => {
@@ -330,7 +340,6 @@ function buildPortfolioResource(transport: ApiTransport) {
       limit: pageSize,
       offset: pageIndex * pageSize,
       search,
-      signal_configuration_uid: filters?.signal_configuration_uid,
       bars_configuration_uid: filters?.bars_configuration_uid,
       ordering: sort?.[0]
         ? `${sort[0].direction === "descending" ? "-" : ""}${sort[0].key}`
@@ -340,10 +349,10 @@ function buildPortfolioResource(transport: ApiTransport) {
   });
 
   return defineResourceApplication({
-    id: "alpaca-etf-portfolio-configurations",
-    label: "ETF Portfolios",
-    itemLabel: "portfolio configuration",
-    description: "Durable analytical portfolios composed from ETF weight signals, Alpaca bars, and CalendarEventSignal rebalance configurations.",
+    id: "alpaca-portfolio-configurations",
+    label: "Portfolios",
+    itemLabel: "portfolio",
+    description: "Durable analytical portfolios built from weights an application provides, valued with Alpaca bars and rebalanced by CalendarEventSignal rebalance configurations.",
     getId: (configuration: PortfolioConfiguration) => configuration.uid,
     adapter,
     columns: [
@@ -434,7 +443,7 @@ function buildRebalanceResource(transport: ApiTransport) {
     id: "portfolio-rebalance-configurations",
     label: "Rebalance Configurations",
     itemLabel: "rebalance configuration",
-    description: "Reusable calendar-event rebalance policies: the latest observed ETF weights execute at selected NYSE session events.",
+    description: "Reusable calendar-event rebalance policies: a portfolio's latest weights execute at selected NYSE session events.",
     getId: (configuration: PortfolioRebalanceConfiguration) => configuration.uid,
     adapter,
     columns: [
@@ -676,7 +685,7 @@ function PortfolioDetail({
       setRetryRevision((value) => value + 1);
       onChanged();
     } catch (requestError) {
-      setScheduleError(formatError(requestError));
+      setScheduleError(formatOwnerActionError(requestError));
     } finally {
       setSchedulePending(false);
     }
@@ -690,7 +699,7 @@ function PortfolioDetail({
     <ResourceDetailShell<PortfolioConfigurationDetail>
       embedded
       breadcrumbs={[
-        { id: "portfolios", label: "ETF Portfolios", onSelect: onBack },
+        { id: "portfolios", label: "Portfolios", onSelect: onBack },
         { id: configuration.uid, label: configuration.name },
       ]}
       loading={loading}
@@ -733,9 +742,7 @@ function PortfolioDetail({
               },
             ],
             inline_fields: [
-              detail && !detail.linked_signal
-                ? { key: "weights", label: "Weights", value: "Provided by an application" }
-                : { key: "signal", label: "Signal", value: detail?.linked_signal?.name ?? "Loading" },
+              { key: "weights", label: "Weights", value: detail ? "Provided by an application" : "Loading" },
               { key: "bars", label: "Valuation source", value: detail?.linked_bars.name ?? "Loading" },
               { key: "scheduled", label: "Scheduled run", value: resolved.scheduled ? "Included" : "Paused" },
               { key: "schedule", label: "Shared Job schedule", value: formatSharedJobSchedule(resolved.job) },
@@ -830,32 +837,20 @@ function PortfolioDetail({
               <summary className="portfolio-detail-panel__summary">
                 <span>
                   <h2>Portfolio construction</h2>
-                  <p>{detail.linked_signal ? "Signal lineage and rebalance policy" : "Weights and rebalance policy"}</p>
+                  <p>Weights and rebalance policy</p>
                 </span>
-                <span className="portfolio-detail-panel__hint">{detail.linked_signal ? "Signal + rebalance" : "Weights + rebalance"}</span>
+                <span className="portfolio-detail-panel__hint">Weights + rebalance</span>
               </summary>
               <div className="portfolio-detail-panel__content">
-                {detail.linked_signal ? (
-                  <section className="portfolio-detail-subpanel">
-                    <h3>Signal</h3>
-                    <dl className="portfolio-detail-tree">
-                      <div><dt>Signal</dt><dd>{detail.linked_signal.name}</dd></div>
-                      <div><dt>Signal description</dt><dd>{detail.linked_signal.description ?? "No description"}</dd></div>
-                      <div><dt>Universe</dt><dd>{detail.linked_signal.universe_name} ({detail.linked_signal.universe_symbol})</dd></div>
-                      <div><dt>Signal runtime account</dt><dd>{detail.linked_signal.account_name} · {formatEnvironment(detail.linked_signal.account_environment)}</dd></div>
-                    </dl>
-                  </section>
-                ) : (
-                  <section className="portfolio-detail-subpanel">
-                    <h3>Weights</h3>
-                    <dl className="portfolio-detail-tree">
-                      <div><dt>Weights</dt><dd>Provided by an application</dd></div>
-                      <div><dt>Assets</dt><dd>{detail.provided_weights?.asset_count ?? "Unavailable"}</dd></div>
-                      <div><dt>First weights</dt><dd>{formatDateTime(detail.provided_weights?.first_observation_at ?? null)}</dd></div>
-                      <div><dt>Latest weights</dt><dd>{formatDateTime(detail.provided_weights?.last_observation_at ?? null)}</dd></div>
-                    </dl>
-                  </section>
-                )}
+                <section className="portfolio-detail-subpanel">
+                  <h3>Weights</h3>
+                  <dl className="portfolio-detail-tree">
+                    <div><dt>Weights</dt><dd>Provided by an application</dd></div>
+                    <div><dt>Assets</dt><dd>{detail.provided_weights?.asset_count ?? "Unavailable"}</dd></div>
+                    <div><dt>First weights</dt><dd>{formatDateTime(detail.provided_weights?.first_observation_at ?? null)}</dd></div>
+                    <div><dt>Latest weights</dt><dd>{formatDateTime(detail.provided_weights?.last_observation_at ?? null)}</dd></div>
+                  </dl>
+                </section>
                 <section className="portfolio-detail-subpanel">
                   <h3>Rebalance</h3>
                   <dl className="portfolio-detail-tree">
@@ -938,7 +933,7 @@ function PortfolioDetail({
 
           <aside className="workflow-guidance" aria-label="Portfolio analytical limitation">
             <Info aria-hidden="true" size={18} />
-            <p>This is an analytical calendar-executed reconstruction. At each configured session event it applies the latest ETF weights observed at or before that event; it does not claim perfect point-in-time holdings or model execution latency, fills, impact, or slippage beyond the configured commission fee.</p>
+            <p>This is an analytical calendar-executed reconstruction. At each configured session event it applies the latest weights given at or before that event; it does not model execution latency, fills, impact, or slippage beyond the configured commission fee.</p>
           </aside>
         </div>
       ) : null}
@@ -1039,7 +1034,7 @@ export function PortfoliosPage({
     try {
       if (deletePortfolioTarget) {
         await api.delete(`${API_ENDPOINTS.portfolioConfigurations}/${encodeURIComponent(deletePortfolioTarget.uid)}`);
-        setMutation({ state: "success", message: `Deleted ${deletePortfolioTarget.name}. Published portfolio observations were retained.` });
+        setMutation({ state: "success", message: `Deleted ${deletePortfolioTarget.name}. The portfolio is retired; its published values were retained.` });
         setDeletePortfolioTarget(null);
         setPortfolioRefreshKey((current) => current + 1);
       } else if (deleteRebalanceTarget) {
@@ -1050,7 +1045,7 @@ export function PortfoliosPage({
       }
       setDeleteConfirmation("");
     } catch (error) {
-      setDeleteError(formatError(error));
+      setDeleteError(deletePortfolioTarget ? formatOwnerActionError(error) : formatError(error));
     } finally {
       setDeletePending(false);
     }
@@ -1073,10 +1068,10 @@ export function PortfoliosPage({
       <ApplicationPageStack>
         <ApplicationPageHeader
           eyebrow="Portfolios"
-          title={manageRebalances ? "Rebalance Configurations" : "ETF Portfolios"}
+          title={manageRebalances ? "Rebalance Configurations" : "Portfolios"}
           description={manageRebalances
-            ? "Maintain reusable CalendarEventSignal policies that execute the latest observed ETF weights at selected NYSE session events."
-            : "New ETF portfolios can no longer be created or edited. The shared portfolio Job declared in the connector's workflow runs every Portfolio Configuration; inspect, run, pause or resume, and delete them here."}
+            ? "Maintain reusable CalendarEventSignal policies that execute a portfolio's latest weights at selected NYSE session events."
+            : "Portfolios built from weights an application provides; the application creates them and gives them their weights. The shared portfolio Job declared in the connector's workflow runs every portfolio. Inspect and run them here; a portfolio's owner can also pause, resume, or delete it."}
         />
 
         {rebalanceFormOpen && manageRebalances ? (
@@ -1157,7 +1152,7 @@ export function PortfoliosPage({
               ) : (
                 <p className="form-error" role="alert">Enter the event offset as a whole number of seconds.</p>
               )}
-              <div className="workflow-guidance"><Info aria-hidden="true" size={18} /><p>CalendarEventSignal executes, at each selected session event, the latest ETF weights observed at or before it. A signal observed after the event first becomes eligible at the next one. It does not model execution delay, partial fills, volume participation, market impact, or slippage beyond the portfolio commission fee.</p></div>
+              <div className="workflow-guidance"><Info aria-hidden="true" size={18} /><p>CalendarEventSignal executes, at each selected session event, the portfolio's latest weights given at or before it. Weights given after the event first become eligible at the next one. It does not model execution delay, partial fills, volume participation, market impact, or slippage beyond the portfolio commission fee.</p></div>
               <div className="form-actions"><button className="button button--primary" type="submit" disabled={!rebalanceRequest || busy}>{editingRebalance ? "Save changes" : "Create configuration"}</button><button className="button button--secondary" type="button" onClick={() => setRebalanceFormOpen(false)} disabled={busy}>Cancel</button></div>
             </form>
           </ApplicationCard>
@@ -1176,7 +1171,7 @@ export function PortfoliosPage({
             open
             title={manageRebalances
               ? "Rebalance configuration request failed"
-              : "ETF portfolio request failed"}
+              : "Portfolio request failed"}
             message={mutation.message}
             onClose={() => setMutation({ state: "idle" })}
           />
@@ -1189,17 +1184,17 @@ export function PortfoliosPage({
         ) : selectedPortfolio ? (
           <PortfolioDetail configuration={selectedPortfolio} transport={transport} onBack={() => setSelectedPortfolio(null)} onChanged={() => setPortfolioRefreshKey((current) => current + 1)} />
         ) : (
-          <ResourceListPage definition={portfolioDefinition} embedded pageSize={25} onRowActivate={setSelectedPortfolio} refreshable refreshKey={portfolioRefreshKey} rowActions={portfolioRowActions} searchPlaceholder="Search ETF Portfolios" />
+          <ResourceListPage definition={portfolioDefinition} embedded pageSize={25} onRowActivate={setSelectedPortfolio} refreshable refreshKey={portfolioRefreshKey} rowActions={portfolioRowActions} searchPlaceholder="Search portfolios" />
         )}
       </ApplicationPageStack>
 
       <ResourceActionConfirmationDialog
         open={deletePortfolioTarget !== null || deleteRebalanceTarget !== null}
         actionLabel="Delete"
-        title={deletePortfolioTarget ? "Delete portfolio configuration" : "Delete rebalance configuration"}
+        title={deletePortfolioTarget ? "Delete portfolio" : "Delete rebalance configuration"}
         selectionLabel={deletePortfolioTarget?.name ?? deleteRebalanceTarget?.name ?? "configuration"}
-        description={deletePortfolioTarget ? "Delete this durable Portfolio Configuration. The shared portfolio Job and its past runs remain." : "Delete this reusable Rebalance Configuration."}
-        warning={deletePortfolioTarget ? "Published portfolio values and weights are retained." : "Deletion is blocked while a Portfolio Configuration still references this row."}
+        description={deletePortfolioTarget ? "Delete this portfolio. It is retired, not erased: it stops running, and its published values and weights remain as its record. Only the portfolio's owner can delete it." : "Delete this reusable Rebalance Configuration."}
+        warning={deletePortfolioTarget ? "An account whose target still holds this portfolio must drop it first." : "Deletion is blocked while a Portfolio Configuration still references this row."}
         confirmationWord="DELETE"
         confirmationValue={deleteConfirmation}
         onConfirmationValueChange={setDeleteConfirmation}

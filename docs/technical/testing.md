@@ -15,26 +15,27 @@ the generated documentation navigation, and type-checks the application.
 directory.
 
 `npm run test:e2e` builds in the explicit test mode and uses a cross-origin host fixture. The
-browser suite checks the direct development transport, asset registration, the universe list,
-detail, Run, and lifecycle actions with no creation form, account review, registration, credential
-rotation, and removal with keys stored encrypted by the API, bars-configuration CRUD, signal and
-portfolio run and delete with no create or edit form, the detail of a portfolio built from provided
-weights, rebalance create and edit, the signal and portfolio scheduled-run toggles (signal pause
-and resume actions, portfolio `PATCH {scheduled}`) with the shared Job's schedule shown read-only,
-the iframe handshake, delegated request headers, live theme changes, documentation routes, and
-Command Center layout geometry at phone, tablet, and desktop widths.
+browser suite checks the navigation's six destinations, that the pages call only the connector
+routes they use, the direct development transport, asset registration, account review,
+registration, credential rotation, and removal with keys stored encrypted by the API,
+bars-configuration CRUD over the connector's three asset sources, the detail of a portfolio built
+from provided weights, portfolio run and delete with no create or edit form, the owner-only
+refusal (`403`, read as "Only the portfolio's owner can do this."), rebalance create and edit, the
+portfolio scheduled-run toggle (`PATCH {scheduled}`) with the shared Job's schedule shown
+read-only, the iframe handshake, delegated request headers, live theme changes, documentation
+routes, and Command Center layout geometry at phone, tablet, and desktop widths.
 
 The asset fixture implements the observable registration-operation contract. Browser coverage
 proves that both planning and execution poll to terminal success and display every producer step
 through the SDK progress list before presenting the corresponding result.
 
-Rebalance tests assert each create and edit body exactly with `request.postDataJSON()`, and the
-signal and portfolio tests assert that those pages send no create or edit request. The fixture
-mirrors the connector's portfolio update and rebalance request models (connector ADR 0009): it
-rejects unknown fields with 422, including the retired `portfolio_prices_frequency` and
-`forward_fill_to_now` and any strategy other than `calendar_event_signal`, applies the connector's
-defaults, and serves the API's rebalance discovery columns. Like the connector, it no longer
-creates universes, signal configurations, or ETF portfolios.
+Rebalance and bars tests assert each create body exactly with `request.postDataJSON()`, and the
+portfolio tests assert that the page sends no create or edit request. The fixture mirrors the
+connector's portfolio update and rebalance request models (connector ADR 0009): it rejects unknown
+fields with 422, including the retired `portfolio_prices_frequency` and `forward_fill_to_now` and
+any strategy other than `calendar_event_signal`, applies the connector's defaults, and serves the
+API's rebalance discovery columns. Like the connector, it creates no portfolio, and it refuses a
+change to a portfolio of another owner with `403 portfolio_owned_by_another`.
 
 The authentication tests check both transports against the fixture's request log: every request
 from the embedded application carries the delegated `Authorization: Bearer` and
