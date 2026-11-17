@@ -8,14 +8,19 @@ The project can:
 - report API health, its implemented capability catalog, and current provider configuration;
 - resolve and register Alpaca US equities as Main Sequence public assets using strict Alpaca and
   OpenFIGI matching;
-- register exact Alpaca symbols and build reusable source-backed asset universes whose Run owns constituent registration;
+- register exact Alpaca symbols, and Run or delete the registered source-backed asset universes
+  whose Run owns constituent registration;
 - register and refresh Alpaca brokerage accounts and holdings snapshots;
 - plan and publish Alpaca stock bars for an asset or registered Asset Universe;
-- build and schedule durable analytical ETF-tracking ms-markets portfolios from holdings signals,
-  persistent interpolated bars, and reusable rebalance configurations;
-- create and operate scheduled Universe-backed ETF signals, run by one shared, workflow-declared
-  signal Job;
+- build and schedule durable analytical ms-markets portfolios from weights an application provides,
+  persistent interpolated bars, and reusable rebalance configurations, and operate the remaining
+  ETF-tracking portfolios built from holdings signals;
+- operate the remaining scheduled Universe-backed ETF signals, run by one shared,
+  workflow-declared signal Job;
 - report plans, validation blockers, execution results, and operational outcomes.
+
+Universes, ETF signals, and ETF portfolios are being retired: the connector no longer creates
+them, and each Environment is drained of the remaining ones.
 
 ## What the site exposes
 
@@ -26,11 +31,13 @@ Configurations, and ETF Portfolios are grouped together under **Portfolios**:
 | --- | --- |
 | Assets | Plan and execute exact-symbol asset registration |
 | Accounts | Create, inspect, update, rotate credentials for, and delete Alpaca registrations from their API keys |
-| Universes | Create explicit Asset Universe registrations and Run extraction, constituent registration, and membership refresh |
+| Universes | Inspect registered Asset Universes, Run extraction, constituent registration, and membership refresh, and delete them |
 | Bars | Create, inspect, edit, and delete stored Alpaca bars configurations |
-| ETF Weight Signals | Create, inspect, edit, run, pause or resume the scheduled run of, and delete signal configurations |
+| ETF Weight Signals | Inspect, run, pause or resume the scheduled run of, and delete signal configurations |
 | Rebalance Configurations | Create, inspect, edit, and delete reusable CalendarEventSignal policies on the NYSE regular session |
-| ETF Portfolios | Create, inspect, edit, run, pause or resume the scheduled run of, and delete durable portfolio configurations |
+| ETF Portfolios | Inspect, run, pause or resume the scheduled run of, and delete durable portfolio configurations |
+
+Creating a portfolio from provided weights is an application capability; the site never offers it.
 
 Holdings snapshots, market-data observations, and other repository capabilities are not implied to
 be site pages. They remain available through the repository surfaces that actually implement them,

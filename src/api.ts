@@ -323,12 +323,6 @@ export interface AssetUniverseDetail extends AssetUniverse {
   asset_category: AssetCategorySummary;
 }
 
-export interface AssetUniverseCreateRequest {
-  name: string;
-  symbol: string;
-  source_url: string;
-}
-
 export type BarConfigurationAssetSource = "assets" | "universe" | "account_holdings";
 
 export interface BarConfiguration {
@@ -414,14 +408,6 @@ export interface SignalJobConfiguration {
   latest_run_at: string | null;
   created_at: string;
   updated_at: string;
-}
-
-export interface SignalJobConfigurationWriteRequest {
-  name: string;
-  description: string | null;
-  universe_uid: string;
-  account_uid: string;
-  scheduled: boolean;
 }
 
 export interface SignalJobRunAccepted {
@@ -515,7 +501,8 @@ export interface PortfolioConfiguration {
   uid: string;
   name: string;
   description: string | null;
-  signal_configuration_uid: string;
+  /** Null for a portfolio built from weights an application provides (connector ADR 0024). */
+  signal_configuration_uid: string | null;
   signal_uid: string;
   bars_configuration_uid: string;
   rebalance_configuration_uid: string;
@@ -618,27 +605,20 @@ export interface CanonicalPortfolioDetail {
   observations: PortfolioValueObservation[];
 }
 
+/** The weights of a portfolio built from weights an application provides (connector ADR 0024). */
+export interface PortfolioProvidedWeights {
+  first_observation_at: string | null;
+  last_observation_at: string | null;
+  asset_count: number;
+}
+
+/** An ETF portfolio has `linked_signal`; a portfolio built from provided weights has `provided_weights`. */
 export interface PortfolioConfigurationDetail extends PortfolioConfiguration {
-  linked_signal: PortfolioLinkedSignal;
+  linked_signal: PortfolioLinkedSignal | null;
+  provided_weights?: PortfolioProvidedWeights | null;
   linked_bars: PortfolioLinkedBars;
   linked_rebalance: PortfolioLinkedRebalance;
   canonical_portfolio: CanonicalPortfolioDetail;
-}
-
-/** Create body, also sent whole as the edit PATCH; the API rejects any other field. */
-export interface PortfolioConfigurationWriteRequest {
-  name: string;
-  description: string | null;
-  signal_configuration_uid: string;
-  bars_configuration_uid: string;
-  rebalance_configuration_uid: string;
-  upsample_frequency_id: "1d";
-  intraday_bar_interpolation_rule: "ffill";
-  valuation_column: string;
-  valuation_maximum_staleness_seconds: number;
-  fail_on_missing_prices: boolean;
-  commission_fee: number;
-  scheduled: boolean;
 }
 
 export type PortfolioJobRunAccepted = SignalJobRunAccepted;

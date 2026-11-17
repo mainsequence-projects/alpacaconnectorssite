@@ -1,21 +1,19 @@
 # Signals
 
-The ETF Weight Signals application creates and operates scheduled Universe-backed ETF signals. The default view
-is the signal list; select **Create signal** to open the form.
+The ETF Weight Signals application operates the remaining scheduled Universe-backed ETF signals.
+ETF signals are being retired: the connector keeps only portfolios built from weights an
+application provides, so it no longer creates signal configurations, and the page has no create or
+edit form. The default view is the signal list; the remaining signals stay available until each
+Environment has been drained of them.
 
-Each configuration selects:
-
-- one active registered Universe;
-- one active registered Alpaca account whose credential Secrets are resolved at runtime; and
-- whether the shared signal Job's daily scheduled run includes it (**Include in the shared signal
-  Job's daily scheduled run**, on by default).
+Each configuration was created with one registered Universe, one registered Alpaca account used at
+runtime, and whether the shared signal Job's daily scheduled run includes it.
 
 ## Scheduled runs
 
 The connector runs every signal on one shared signal Job, `Alpaca ETF Signal`. Its workflow file
-declares that Job together with its daily schedule (00:30 UTC) and its compute, so the form has no
-schedule or compute fields; the connector rejects a request that still sends them. A configuration
-only chooses whether the scheduled run includes it.
+declares that Job together with its daily schedule (00:30 UTC) and its compute. A configuration only
+chooses whether the scheduled run includes it.
 
 The details page shows the shared Job's schedule read-only, and whether the signal is included.
 **Pause** leaves the signal out of the scheduled run and **Resume** includes it again; both call the
@@ -24,19 +22,16 @@ push of the connector has created the Job on the branch, the signal's state is `
 the details page reports that the Job is not deployed yet. A JobRun is execution history and does
 not store or override the configuration.
 
-Creating a configuration also idempotently creates the canonical ms-markets `SignalMetadata` row.
-The deterministic `signal_uid` is visible in the list immediately; the first weights observation is
-still written only when a run publishes it. The CodeRepositoryBranch resolves the Organization Environment
-internally, so the GUI never asks the user to select or submit one.
+The list shows each configuration's deterministic `signal_uid`. The CodeRepositoryBranch resolves
+the Organization Environment internally, so the GUI never asks the user to select or submit one.
 
 `universe_uid` defines the stable final signal identity. `account_uid` is serialized runtime
 configuration so an automatic run can access Alpaca and register missing components. It does not
 change the final signal UID and is not a column or index dimension in `SignalWeightsStorage`.
 
-Use row actions to run immediately, edit, or delete a configuration. The scheduled-run checkbox is
-also in the edit form. Reconciliation is an internal operation and is not a user-facing action.
-Delete removes only the configuration; prior signal observations and the shared Job's past runs
-remain.
+Use row actions to run immediately or delete a configuration. Reconciliation is an internal
+operation and is not a user-facing action. Delete removes only the configuration; prior signal
+observations and the shared Job's past runs remain.
 
 Every successful run extracts the current holdings once, bulk-registers missing Alpaca assets,
 bulk-refreshes the linked category, and writes one complete weights observation. The observation

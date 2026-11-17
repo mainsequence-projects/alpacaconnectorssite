@@ -112,16 +112,20 @@ and confirmation dialogs retain their own SDK-controlled loading states. Termina
 remain in the owning route and use capability-specific titles such as **Rebalance configuration
 request failed** rather than a broader portfolio label.
 
-The ETF Portfolios page stores only calculation intent in the Portfolio Configuration: references
-to an existing Signal Configuration, Bars Configuration, and Rebalance Configuration plus the
-supported interpolation and valuation parameters (valuation column, maximum price staleness,
-missing-price policy, commission fee), and its `scheduled` flag. Schedule, compute, image, and
-deployment state belong to the shared portfolio Job that the connector declares in its workflow
-file; the signal and portfolio pages show that Job read-only and never write it.
+The connector no longer creates universes, their sources, signal configurations, or ETF
+portfolios, and keeps only portfolios built from weights an application provides, whose creation is
+the application's capability. The Universes, ETF Weight Signals, and ETF Portfolios pages
+therefore have no create or edit form: they list, inspect, run, and delete what remains while each
+Environment is drained. A Portfolio Configuration holds only calculation intent: its weights source
+(an ETF signal configuration or provided weights), Bars Configuration, and Rebalance Configuration,
+the supported interpolation and valuation parameters (valuation column, maximum price staleness,
+missing-price policy, commission fee), and its `scheduled` flag, which the portfolio details page
+changes with `PATCH {scheduled}`. Schedule, compute, image, and deployment state belong to the
+shared portfolio Job that the connector declares in its workflow file; the signal and portfolio
+pages show that Job read-only and never write it.
 
 Rebalance Configurations own execution timing (connector ADR 0009): the `calendar_event_signal`
 strategy, calendar, session, market event, signed offset, cadence, and weekly weekday. New
 policies use `US_EQUITY_REBALANCE_CALENDAR` from `src/api.ts`, the NYSE `regular` session. The
-portfolio and rebalance forms build their bodies from the request types in `src/api.ts`, which
-mirror the connector's request models field for field; an edit sends the same whole body as
-`PATCH`.
+rebalance form builds its body from the request type in `src/api.ts`, which mirrors the
+connector's request model field for field; an edit sends the same whole body as `PATCH`.

@@ -293,6 +293,22 @@ let signalJobs = [
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   },
+  {
+    uid: "signal-qqq",
+    name: "Daily QQQ observation",
+    description: "Observe the registered Nasdaq 100 Universe.",
+    signal_uid: "signal-universe-qqq",
+    universe_uid: "universe-qqq",
+    account_uid: "account-paper",
+    scheduled: true,
+    job_uid: signalJob.uid,
+    job: signalJob,
+    lifecycle_state: "ready",
+    latest_run_status: null,
+    latest_run_at: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
 ];
 // Calendar-event rebalance policies (connector ADR 0009); calendar_event_signal is the only strategy.
 let portfolioRebalanceConfigurations = [
@@ -311,17 +327,12 @@ let portfolioRebalanceConfigurations = [
     updated_at: "2026-01-01T00:00:00Z",
   },
 ];
-let portfolioConfigurations = [
-  {
-    uid: "portfolio-config-existing",
-    name: "Daily IVV analytical portfolio",
-    description: "Track observed IVV weights using daily Alpaca bars.",
-    signal_configuration_uid: "signal-existing",
-    signal_uid: "signal-universe-ivv",
+function portfolioConfiguration(values) {
+  return {
+    weights_source: "etf_signal",
     bars_configuration_uid: "bars-existing",
     rebalance_configuration_uid: "rebalance-nyse-close",
     rebalance_strategy: "calendar_event_signal",
-    portfolio_uid: "portfolio-existing",
     scheduled: true,
     job_uid: portfolioJob.uid,
     upsample_frequency_id: "1d",
@@ -331,27 +342,53 @@ let portfolioConfigurations = [
     fail_on_missing_prices: true,
     commission_fee: 0.00018,
     job: portfolioJob,
+    created_at: "2026-01-01T00:00:00Z",
+    ...values,
+  };
+}
+
+// ETF portfolios follow an ETF signal; a provided-weights portfolio follows weights an application
+// gives (connector ADR 0024) and has no signal configuration.
+let portfolioConfigurations = [
+  portfolioConfiguration({
+    uid: "portfolio-config-existing",
+    name: "Daily IVV analytical portfolio",
+    description: "Track observed IVV weights using daily Alpaca bars.",
+    signal_configuration_uid: "signal-existing",
+    signal_uid: "signal-universe-ivv",
+    portfolio_uid: "portfolio-existing",
     latest_run_status: "SUCCEEDED",
     latest_run_at: "2026-01-03T15:00:00Z",
-    created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-03T15:00:00Z",
-  },
+  }),
+  portfolioConfiguration({
+    uid: "portfolio-config-qqq",
+    name: "Daily QQQ analytical portfolio",
+    description: "Track observed QQQ weights using daily Alpaca bars.",
+    signal_configuration_uid: "signal-existing",
+    signal_uid: "signal-universe-ivv",
+    portfolio_uid: null,
+    latest_run_status: null,
+    latest_run_at: null,
+    updated_at: "2026-01-01T00:00:00Z",
+  }),
+  portfolioConfiguration({
+    uid: "portfolio-config-provided",
+    name: "Application momentum portfolio",
+    description: "Weights given by an application.",
+    weights_source: "provided",
+    signal_configuration_uid: null,
+    signal_uid: "signal-provided-momentum",
+    portfolio_uid: "portfolio-provided",
+    latest_run_status: "SUCCEEDED",
+    latest_run_at: "2026-01-03T15:00:00Z",
+    updated_at: "2026-01-03T15:00:00Z",
+  }),
 ];
 
 // The API's portfolio and rebalance request models forbid unknown fields (`extra="forbid"`), so a
 // retired field such as `forward_fill_to_now` or `portfolio_prices_frequency` is a 422. These
 // checks mirror those models and their defaults; 422 bodies never echo the submitted input.
-const PORTFOLIO_REQUEST_DEFAULTS = {
-  description: null,
-  upsample_frequency_id: "1d",
-  intraday_bar_interpolation_rule: "ffill",
-  valuation_column: "close",
-  valuation_maximum_staleness_seconds: 86400,
-  fail_on_missing_prices: true,
-  commission_fee: 0.00018,
-  scheduled: true,
-};
-const PORTFOLIO_REQUEST_REQUIRED = ["name", "signal_configuration_uid", "bars_configuration_uid", "rebalance_configuration_uid"];
 const REBALANCE_REQUEST_DEFAULTS = {
   description: null,
   strategy: "calendar_event_signal",
@@ -408,14 +445,15 @@ function requestModelErrors(body, { checks, required, partial, label }) {
   return errors;
 }
 
-function portfolioRequestErrors(body, { partial }) {
+// The API no longer creates portfolio configurations here, so only the partial PATCH model remains.
+function portfolioUpdateErrors(body) {
   // The API rejects retired Job settings before it validates individual fields.
   const retired = retiredJobSettingsErrors(body);
   if (retired.length) return retired;
   return requestModelErrors(body, {
     checks: PORTFOLIO_FIELD_CHECKS,
-    required: PORTFOLIO_REQUEST_REQUIRED,
-    partial,
+    required: [],
+    partial: true,
     label: "portfolio configuration",
   });
 }
@@ -468,9 +506,10 @@ function portfolioConfigurationDetail(configuration) {
       drawdown: 0,
     },
   ] : [];
+  const provided = configuration.weights_source === "provided";
   return {
     ...configuration,
-    linked_signal: {
+    linked_signal: provided ? null : {
       name: "Daily IVV observation",
       description: "Observe current IVV constituents and weights.",
       scheduled: true,
@@ -479,6 +518,12 @@ function portfolioConfigurationDetail(configuration) {
       account_name: "Paper brokerage",
       account_environment: "paper",
     },
+    provided_weights: provided ? {
+      signal_uid: configuration.signal_uid,
+      first_observation_at: "2026-01-01T14:30:00Z",
+      last_observation_at: "2026-01-03T14:30:00Z",
+      asset_count: 3,
+    } : null,
     linked_bars: {
       name: "Daily paper holdings",
       description: "Daily SIP bars for the configured universe.",
@@ -1357,45 +1402,6 @@ createServer(async (request, response) => {
       ? sendJson(response, 200, universe)
       : sendJson(response, 404, { detail: "Universe not found." });
   }
-  if (request.method === "POST" && url.pathname === "/v1/universes") {
-    const body = await readJson(request);
-    const normalizedSymbol = String(body.symbol ?? "").trim().toUpperCase();
-    const sourceUid = `source-${normalizedSymbol.toLowerCase()}`;
-    const now = new Date().toISOString();
-    if (!universeSources.some((source) => source.uid === sourceUid)) {
-      universeSources.push({
-        uid: sourceUid,
-        name: body.name,
-        symbol: normalizedSymbol,
-        source_url: body.source_url,
-        enabled: true,
-        created_at: now,
-        updated_at: now,
-      });
-    }
-    const universe = {
-      uid: `universe-${normalizedSymbol.toLowerCase()}`,
-      source_uid: sourceUid,
-      asset_category_uid: `category-${normalizedSymbol.toLowerCase()}`,
-      display_name: body.name,
-      symbol: normalizedSymbol,
-      source_url: body.source_url,
-      description: `Configured holdings universe for ETF ${normalizedSymbol}.`,
-      is_active: true,
-      asset_count: 0,
-      asset_category: {
-        uid: `category-${normalizedSymbol.toLowerCase()}`,
-        unique_identifier: `HOLDINGS__${normalizedSymbol}`,
-        display_name: body.name,
-        description: `Configured holdings universe for ETF ${normalizedSymbol}.`,
-      },
-      created_at: now,
-      updated_at: now,
-    };
-    universes.push(universe);
-    universeMemberAssetUids.set(universe.uid, []);
-    return sendJson(response, 201, universe);
-  }
   const universeActionMatch = url.pathname.match(
     /^\/v1\/universes\/actions\/(run|activate|deactivate|remove)(\/preflight)?$/,
   );
@@ -1624,30 +1630,6 @@ createServer(async (request, response) => {
       },
     });
   }
-  if (request.method === "POST" && url.pathname === "/v1/signal-jobs") {
-    const body = await readJson(request);
-    const errors = retiredJobSettingsErrors(body);
-    if (errors.length) return sendJson(response, 422, { detail: errors });
-    const now = new Date().toISOString();
-    const created = {
-      uid: `signal-${signalJobs.length + 1}`,
-      name: body.name,
-      description: body.description,
-      signal_uid: `signal-${body.universe_uid}`,
-      universe_uid: body.universe_uid,
-      account_uid: body.account_uid,
-      scheduled: body.scheduled ?? true,
-      job_uid: signalJob.uid,
-      job: signalJob,
-      latest_run_status: null,
-      latest_run_at: null,
-      created_at: now,
-      updated_at: now,
-    };
-    created.lifecycle_state = signalLifecycle(created);
-    signalJobs.push(created);
-    return sendJson(response, 201, created);
-  }
   const signalActionMatch = url.pathname.match(/^\/v1\/signal-jobs\/([^/]+)\/actions\/(run|pause|resume|reconcile)$/);
   if (request.method === "POST" && signalActionMatch) {
     const uid = decodeURIComponent(signalActionMatch[1]);
@@ -1752,45 +1734,6 @@ createServer(async (request, response) => {
       },
     });
   }
-  if (request.method === "POST" && url.pathname === "/v1/portfolio-configurations") {
-    const body = await readJson(request);
-    const errors = portfolioRequestErrors(body, { partial: false });
-    if (errors.length) return sendJson(response, 422, { detail: errors });
-    const now = new Date().toISOString();
-    const ordinal = portfolioConfigurations.length + 1;
-    const values = { ...PORTFOLIO_REQUEST_DEFAULTS, ...body };
-    const signal = signalJobs.find((candidate) => candidate.uid === values.signal_configuration_uid);
-    const rebalance = portfolioRebalanceConfigurations.find((candidate) => candidate.uid === values.rebalance_configuration_uid);
-    if (!signal || !rebalance) {
-      return sendJson(response, 404, { detail: "Signal or rebalance configuration not found." });
-    }
-    const created = {
-      uid: `portfolio-config-${ordinal}`,
-      name: values.name,
-      description: values.description,
-      signal_configuration_uid: values.signal_configuration_uid,
-      signal_uid: signal.signal_uid,
-      bars_configuration_uid: values.bars_configuration_uid,
-      rebalance_configuration_uid: values.rebalance_configuration_uid,
-      rebalance_strategy: rebalance.strategy,
-      portfolio_uid: null,
-      scheduled: values.scheduled,
-      job_uid: portfolioJob.uid,
-      upsample_frequency_id: values.upsample_frequency_id,
-      intraday_bar_interpolation_rule: values.intraday_bar_interpolation_rule,
-      valuation_column: values.valuation_column,
-      valuation_maximum_staleness_seconds: values.valuation_maximum_staleness_seconds,
-      fail_on_missing_prices: values.fail_on_missing_prices,
-      commission_fee: values.commission_fee,
-      job: portfolioJob,
-      latest_run_status: null,
-      latest_run_at: null,
-      created_at: now,
-      updated_at: now,
-    };
-    portfolioConfigurations.push(created);
-    return sendJson(response, 201, created);
-  }
   const portfolioActionMatch = url.pathname.match(/^\/v1\/portfolio-configurations\/([^/]+)\/actions\/run$/);
   if (request.method === "POST" && portfolioActionMatch) {
     const uid = decodeURIComponent(portfolioActionMatch[1]);
@@ -1820,7 +1763,7 @@ createServer(async (request, response) => {
     if (request.method === "GET") return sendJson(response, 200, portfolioConfigurationDetail(portfolioConfigurations[index]));
     if (request.method === "PATCH") {
       const body = await readJson(request);
-      const errors = portfolioRequestErrors(body, { partial: true });
+      const errors = portfolioUpdateErrors(body);
       if (errors.length) return sendJson(response, 422, { detail: errors });
       const rebalance = portfolioRebalanceConfigurations.find((candidate) => (
         candidate.uid === (body.rebalance_configuration_uid ?? portfolioConfigurations[index].rebalance_configuration_uid)

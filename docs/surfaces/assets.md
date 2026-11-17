@@ -21,9 +21,9 @@ The completed plan reports resolution summaries, missing Alpaca symbols, optiona
 warnings, and the symbols that would be registered. **Execute approved plan** becomes available
 only when `can_register` is true and the form has not changed since planning.
 
-To manage an ETF or another provider-derived collection, create an account-independent Universe
-with its source. Universe Run asks for an Alpaca account as execution context, discovers
-constituents, and registers missing assets before refreshing the linked category membership.
+New universes can no longer be created. A registered Universe's Run asks for an Alpaca account as
+execution context, discovers constituents, and registers missing assets before refreshing the
+linked category membership.
 
 The registered-assets table shows the internal Main Sequence UID, immutable Alpaca asset UUID,
 current Alpaca symbol and exchange, tradability, and optional FIGI. The canonical

@@ -19,13 +19,11 @@ import {
   ResourceDetailShell,
   ResourceIconLabelCell,
   ResourceListPage,
-  ResourcePicker,
   ResourceStatusCell,
-  type ResourcePickerOption,
   type ResourceRowAction,
 } from "@dev-mainsequence/command-center-sdk/views";
-import { Activity, Info } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Activity } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import {
@@ -33,12 +31,9 @@ import {
   createApiClient,
   formatSharedJobSchedule,
   signalObservationsPath,
-  type AccountSummary,
   type ApiTransport,
-  type AssetUniverse,
   type ResourceCollection,
   type SignalJobConfiguration,
-  type SignalJobConfigurationWriteRequest,
   type SignalJobRunAccepted,
   type SignalObservations,
 } from "./api";
@@ -391,17 +386,6 @@ export function SignalsPage({
 }) {
   const api = useMemo(() => createApiClient(transport), [transport]);
   const definition = useMemo(() => buildSignalResource(transport), [transport]);
-  const [formOpen, setFormOpen] = useState(false);
-  const [editing, setEditing] = useState<SignalJobConfiguration | null>(null);
-  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [universes, setUniverses] = useState<AssetUniverse[]>([]);
-  const [dependenciesLoading, setDependenciesLoading] = useState(false);
-  const [dependenciesError, setDependenciesError] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [universeUid, setUniverseUid] = useState("");
-  const [accountUid, setAccountUid] = useState("");
-  const [scheduled, setScheduled] = useState(true);
   const [mutation, setMutation] = useState<MutationState>({ state: "idle" });
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedSignal, setSelectedSignal] = useState<SignalJobConfiguration | null>(null);
@@ -409,123 +393,6 @@ export function SignalsPage({
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deletePending, setDeletePending] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!formOpen) return;
-    const controller = new AbortController();
-    setDependenciesLoading(true);
-    setDependenciesError(null);
-    Promise.all([
-      api.get<ResourceCollection<AccountSummary>>(
-        `${API_ENDPOINTS.accounts}?limit=100&offset=0&active=true&ordering=account_name`,
-        controller.signal,
-      ),
-      api.get<ResourceCollection<AssetUniverse>>(
-        `${API_ENDPOINTS.universes}?limit=100&offset=0&ordering=display_name`,
-        controller.signal,
-      ),
-    ])
-      .then(([accountResponse, universeResponse]) => {
-        setAccounts(accountResponse.items);
-        setUniverses(universeResponse.items.filter((universe) => universe.is_active));
-        setAccountUid((current) => current || accountResponse.items[0]?.uid || "");
-        setUniverseUid((current) => current || universeResponse.items.find((item) => item.is_active)?.uid || "");
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) setDependenciesError(formatError(error));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setDependenciesLoading(false);
-      });
-    return () => controller.abort();
-  }, [api, formOpen]);
-
-  const accountOptions = useMemo<ResourcePickerOption[]>(() => accounts.map((account) => ({
-    value: account.uid,
-    label: account.account_name,
-    subtitle: `${account.is_paper ? "Paper" : "Live"} · ${account.unique_identifier}`,
-  })), [accounts]);
-  const universeOptions = useMemo<ResourcePickerOption[]>(() => universes.map((universe) => ({
-    value: universe.uid,
-    label: universe.display_name,
-    subtitle: `${universe.symbol} · ${universe.uid}`,
-  })), [universes]);
-  const busy = mutation.state === "loading";
-  const canSubmit = Boolean(
-    name.trim()
-    && universeUid
-    && accountUid
-    && !busy
-    && !dependenciesLoading
-    && !dependenciesError,
-  );
-
-  function resetForm() {
-    setEditing(null);
-    setName("");
-    setDescription("");
-    setUniverseUid("");
-    setAccountUid("");
-    setScheduled(true);
-  }
-
-  function openCreate() {
-    resetForm();
-    setFormOpen(true);
-    setMutation({ state: "idle" });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  function openEdit(item: SignalJobConfiguration) {
-    setEditing(item);
-    setName(item.name);
-    setDescription(item.description ?? "");
-    setUniverseUid(item.universe_uid);
-    setAccountUid(item.account_uid);
-    setScheduled(item.scheduled);
-    setFormOpen(true);
-    setMutation({ state: "idle" });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  function closeForm() {
-    resetForm();
-    setFormOpen(false);
-    setMutation({ state: "idle" });
-  }
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!canSubmit) {
-      setMutation({ state: "error", message: "Complete the name, Universe, and account fields." });
-      return;
-    }
-    const request: SignalJobConfigurationWriteRequest = {
-      name: name.trim(),
-      description: description.trim() || null,
-      universe_uid: universeUid,
-      account_uid: accountUid,
-      scheduled,
-    };
-    setMutation({ state: "loading", label: editing ? "Updating signal" : "Creating signal" });
-    try {
-      if (editing) {
-        await api.patch<SignalJobConfiguration>(
-          `${API_ENDPOINTS.signalJobs}/${encodeURIComponent(editing.uid)}`,
-          request,
-        );
-      } else {
-        await api.post<SignalJobConfiguration>(API_ENDPOINTS.signalJobs, request);
-      }
-      const message = `${editing ? "Updated" : "Created"} ${request.name}.`;
-      resetForm();
-      setFormOpen(false);
-      setMutation({ state: "success", message });
-      setRefreshKey((current) => current + 1);
-    } catch (error) {
-      setMutation({ state: "error", message: formatError(error) });
-    }
-  }
 
   async function runSignalJob(item: SignalJobConfiguration) {
     setMutation({ state: "loading", label: `Starting ${item.name}` });
@@ -564,16 +431,8 @@ export function SignalsPage({
     }
   }
 
-  const primaryActions = useMemo(() => [{
-    id: "create-signal-job",
-    label: "Create signal",
-    tone: "primary" as const,
-    disabled: formOpen,
-    onSelect: openCreate,
-  }], [formOpen]);
   const rowActions = useMemo<readonly ResourceRowAction<SignalJobConfiguration>[]>(() => [
     { id: "run-signal-job", label: "Run now", disabled: (item) => item.job?.image_status !== "ready", onSelect: (item) => void runSignalJob(item) },
-    { id: "edit-signal-job", label: "Edit", onSelect: openEdit },
     { id: "delete-signal-job", label: "Delete", tone: "danger", onSelect: setDeleteTarget },
   ], []);
 
@@ -583,80 +442,8 @@ export function SignalsPage({
         <ApplicationPageHeader
           eyebrow="Portfolios"
           title="ETF Weight Signals"
-          description="Create one canonical ms-markets Signal for each Universe-backed configuration. The shared signal Job declared in the connector's workflow runs every configuration; each run extracts the current components, registers missing Alpaca assets in bulk, and publishes one observed weight frame."
+          description="ETF weight signals are being retired: new signals can no longer be created or edited. The shared signal Job declared in the connector's workflow still runs the remaining ones; inspect, run, pause or resume, and delete them here."
         />
-
-        {formOpen ? (
-          <ApplicationCard header={<h2>{editing ? "Edit signal" : "Create signal"}</h2>}>
-            <form className="workflow-form" onSubmit={submit}>
-              <section className="workflow-form-section" aria-labelledby="signal-update-configuration-heading">
-                <div className="workflow-form-section__header">
-                  <h3 id="signal-update-configuration-heading">Signal update configuration</h3>
-                  <p>The Universe defines the signal. The account supplies Alpaca credentials and asset resolution only while the update runs.</p>
-                </div>
-                <div className="form-grid">
-                  <label className="field">Signal name
-                    <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Daily S&amp;P 500 holdings signal" disabled={busy} />
-                  </label>
-                  <label className="field field--wide">Signal description <span>Optional</span>
-                    <textarea rows={2} value={description} onChange={(event) => setDescription(event.target.value)} disabled={busy} />
-                  </label>
-                  <div className="field resource-picker-field">
-                    <label id="signal-universe-label">Universe</label>
-                    <ResourcePicker
-                      ariaLabelledBy="signal-universe-label"
-                      disabled={busy || dependenciesLoading}
-                      emptyMessage="No active Universes."
-                      fullWidth
-                      loading={dependenciesLoading}
-                      mode="single"
-                      onValueChange={setUniverseUid}
-                      options={universeOptions}
-                      placeholder="Select the signal Universe"
-                      searchable
-                      searchPlaceholder="Search Universes"
-                      value={universeUid || null}
-                    />
-                  </div>
-                  <div className="field resource-picker-field">
-                    <label id="signal-account-label">Runtime Alpaca account</label>
-                    <ResourcePicker
-                      ariaLabelledBy="signal-account-label"
-                      disabled={busy || dependenciesLoading}
-                      emptyMessage="No active registered Alpaca accounts."
-                      fullWidth
-                      loading={dependenciesLoading}
-                      mode="single"
-                      onValueChange={setAccountUid}
-                      options={accountOptions}
-                      placeholder="Select the account used at runtime"
-                      searchable
-                      searchPlaceholder="Search registered accounts"
-                      value={accountUid || null}
-                    />
-                  </div>
-                </div>
-              </section>
-
-              <section className="workflow-form-section" aria-labelledby="signal-scheduled-run-heading">
-                <div className="workflow-form-section__header">
-                  <h3 id="signal-scheduled-run-heading">Scheduled run</h3>
-                  <p>The shared signal Job declared in the connector&apos;s workflow runs every scheduled signal once a day; its schedule is shown on the signal&apos;s details page. A signal left out can still be run manually.</p>
-                </div>
-                <label className="checkbox-field"><input type="checkbox" checked={scheduled} onChange={(event) => setScheduled(event.target.checked)} disabled={busy} />Include in the shared signal Job&apos;s daily scheduled run</label>
-              </section>
-              {dependenciesError ? <p className="form-error" role="alert">{dependenciesError}</p> : null}
-              <div className="form-actions">
-                <button className="button button--primary" type="submit" disabled={!canSubmit}>{editing ? "Save changes" : "Create signal"}</button>
-                <button className="button button--secondary" type="button" onClick={closeForm} disabled={busy}>Cancel</button>
-              </div>
-              <div className="workflow-guidance">
-                <Info aria-hidden="true" size={18} />
-                <p><strong>Universe</strong> defines the stable signal identity. The account is serialized updater input only: it resolves Secret names and registers missing assets, but is never written into the signal UID or signal weights table. The shared Job&apos;s schedule controls when the updater starts. Every start forces one complete observation; that execution rule is fixed for this signal and is not another user-editable schedule field. Published timestamps are observations and do not guarantee the exact economic effective time of ETF weights.</p>
-              </div>
-            </form>
-          </ApplicationCard>
-        ) : null}
 
         {mutation.state === "loading" ? (
           <RequestProgressDialog open title={mutation.label} message="Waiting for the Alpaca Connectors API and Main Sequence Job service." />
@@ -681,7 +468,6 @@ export function SignalsPage({
             definition={definition}
             embedded
             pageSize={25}
-            primaryActions={primaryActions}
             onRowActivate={setSelectedSignal}
             refreshable
             refreshKey={refreshKey}

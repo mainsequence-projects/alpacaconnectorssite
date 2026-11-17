@@ -47,20 +47,24 @@ This repository is the Command Center static-site application for the Alpaca Con
   and key (`alpaca-connectors` / `alpaca`) in `build_environment`, never by a pinned UID. Never
   rename the workflow file or the `alpaca-connectors-site` key: the site's UID, URL, and Command
   Center link depend on them, and the Alpaca Agent hands people that link for key entry.
+- Universes, ETF signals, and ETF portfolios are being retired (decided 2026-11-17): the connector
+  keeps only portfolios built from weights an application provides, and no longer creates
+  universes, their sources, signal configurations, or ETF portfolios. Never add a create or edit
+  form for them; the pages list, inspect, run, and delete what remains while each Environment is
+  drained. Creating a portfolio from provided weights is an application capability: the site
+  never offers it.
 - Universes: account-independent ETF holdings sources; Run asks for an Alpaca account only as
   execution context when it registers newly discovered constituents.
 - Bars: create, list, edit, and delete stored Alpaca bar configurations using registered accounts,
   exactly one asset source, and an already-migrated market-data profile.
-- Signals and portfolios: create and operate configurations that the connector's two
-  workflow-declared Jobs run (connector ADR 0013). Forms send only `scheduled` (whether the shared
-  Job's daily scheduled run includes the configuration), never schedule or compute settings; the
-  details pages show the shared Job's schedule read-only. `account_uid` is runtime-only.
+- Signals and portfolios: operate the configurations that the connector's two workflow-declared
+  Jobs run (connector ADR 0013). Pause and resume change only `scheduled` (whether the shared Job's
+  daily scheduled run includes the configuration), never schedule or compute settings; the details
+  pages show the shared Job's schedule read-only. `account_uid` is runtime-only.
 - Rebalance configurations: `calendar_event_signal` policies (connector ADR 0009). New ones use the
   NYSE calendar's `regular` session; the form sends every calendar-event field (market event,
-  signed offset in seconds, cadence, weekday). Portfolio forms send
-  `valuation_maximum_staleness_seconds` and never the retired `portfolio_prices_frequency` or
-  `forward_fill_to_now`; the connector rejects unknown fields with 422. Browser tests assert the
-  exact create and edit bodies.
+  signed offset in seconds, cadence, weekday); the connector rejects unknown fields with 422.
+  Browser tests assert the exact create and edit bodies.
 - Documentation: project-wide capability and configuration reference, plus workflow and technical
   guidance. Documentation is a footer application in the SDK navigation rail, not an application
   page or a custom link outside the rail.

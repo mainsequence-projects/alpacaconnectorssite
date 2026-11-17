@@ -2,45 +2,23 @@
 
 The **Portfolios** navigation group contains three sibling applications:
 
-- **ETF Weight Signals** maintains the observed ETF-weight producers;
+- **ETF Weight Signals** operates the remaining observed ETF-weight producers;
 - **Rebalance Configurations** maintains reusable calendar-event rebalance policies; and
-- **ETF Portfolios** composes those resources into analytical portfolios.
+- **ETF Portfolios** lists, inspects, runs, and deletes analytical portfolios.
 
-The ETF Portfolios application opens directly on the portfolio list. Select **Create portfolio**
-to open the form.
+The ETF Portfolios application opens directly on the portfolio list. ETF portfolios are being
+retired: the connector keeps only portfolios built from weights an application provides, and
+creating those is the application's capability, so the page has no create or edit form. The
+remaining ETF portfolios stay available until each Environment has been drained of them.
 
 Each configuration composes:
 
-- one existing ETF Weight Signal Configuration;
+- an ETF Weight Signal Configuration, or the weights an application provides (connector ADR 0024);
 - one enabled Alpaca Bars Configuration;
 - one reusable Rebalance Configuration;
 - persistent daily `InterpolatedPrices` using forward-fill interpolation;
 - the valuation column, maximum price staleness, missing-price policy, and commission fee; and
-- whether the shared portfolio Job's daily scheduled run includes it (**Include in the shared
-  portfolio Job's daily scheduled run**, on by default).
-
-Create and **Save changes** send exactly the connector's portfolio request model (connector
-ADR 0009), for example:
-
-```json
-{
-  "name": "Daily observed IVV portfolio",
-  "description": null,
-  "signal_configuration_uid": "<signal configuration UID>",
-  "bars_configuration_uid": "<bars configuration UID>",
-  "rebalance_configuration_uid": "<rebalance configuration UID>",
-  "upsample_frequency_id": "1d",
-  "intraday_bar_interpolation_rule": "ffill",
-  "valuation_column": "close",
-  "valuation_maximum_staleness_seconds": 86400,
-  "fail_on_missing_prices": true,
-  "commission_fee": 0.00018,
-  "scheduled": true
-}
-```
-
-The connector rejects any other field with 422, including the retired `portfolio_prices_frequency`
-and `forward_fill_to_now`.
+- whether the shared portfolio Job's daily scheduled run includes it.
 
 The GUI does not expose an Environment selector. The CodeRepositoryBranch runtime resolves its
 Organization Environment. Each run selects its configuration with `--configuration-uid <uid>`.
@@ -53,8 +31,7 @@ table, or any Job schedule, compute, image, or deployment field.
 
 The connector runs every portfolio on one shared portfolio Job, `Alpaca ETF Portfolio`. Its
 workflow file declares the execution path, the daily schedule (02:00 UTC), CPU, memory, maximum
-runtime, spot preference, and automatic deployment, so the form has no schedule or compute fields;
-the connector rejects a request that still sends them. A JobRun contains execution history only.
+runtime, spot preference, and automatic deployment. A JobRun contains execution history only.
 
 The details page shows the shared Job's schedule, timezone, resources, and image read-only, and
 whether the portfolio is included in the scheduled run. **Pause** and **Resume** send
@@ -67,14 +44,14 @@ yet.
 Valuation uses the latest price at or before each real portfolio timestamp, a rebalance event or a
 valuation-source observation:
 
-- **Maximum price staleness (seconds)** bounds how old that price may be. The default, `86400`, is
-  one day; the field shows the value as a duration and accepts whole seconds greater than zero.
-  Alignment never creates timestamps, extends the portfolio to the current time, or changes signal
-  validity, so there is no option to extend prices to now.
-- **Stop when a required asset has no price** (on by default) decides what happens when a required
-  asset, one the portfolio holds, enters, or exits, has no price within that bound. When enabled,
-  the run stops and reports the asset. When disabled, the valuation is attempted without that
-  price; no price is invented, and the run may still fail if no usable valuation remains.
+- **Maximum price staleness** bounds how old that price may be; the details page shows it as a
+  duration with its seconds (the connector's default, `86400`, is one day). Alignment never creates
+  timestamps, extends the portfolio to the current time, or changes signal validity, so there is no
+  option to extend prices to now.
+- The **missing-price policy** decides what happens when a required asset, one the portfolio holds,
+  enters, or exits, has no price within that bound: either the run stops and reports the asset, or
+  the valuation is attempted without that price; no price is invented, and the run may still fail
+  if no usable valuation remains.
 
 Persistent `InterpolatedPrices` still forward-fills gaps in the source bars, and each asset carries
 the rebalance calendar, so daily valuation observations follow the configured exchange session.
@@ -117,8 +94,7 @@ of the connector's rebalance request model:
 }
 ```
 
-The list shows each policy's calendar, market event with its offset, and cadence; the portfolio
-form's picker summarizes the same timing.
+The list shows each policy's calendar, market event with its offset, and cadence.
 
 This is a calendar-executed reconstruction. ETF Weight Signal timestamps record when holdings were
 observed; they do not guarantee exact economic effective time. The backtest does not model
@@ -135,9 +111,11 @@ persistent interpolation storage. The portfolio run updates interpolation and ca
 ms-markets portfolio without rerunning the signal or raw-bars producers.
 
 Select a row to load its business-facing detail on demand. The detail resolves the linked Signal,
-Universe, Alpaca accounts, Bars scope and profile, Rebalance policy with its calendar, event, and
-cadence, the maximum price staleness, the shared Job's settings, and the canonical portfolio
-calendar without exposing their internal UIDs. It also queries up to the latest
+Universe, and runtime account of an ETF portfolio, or, for a portfolio built from provided weights,
+how many assets its weights cover and when it was first and last given weights. It also resolves
+the Bars scope and profile, Rebalance policy with its calendar, event, and cadence, the maximum
+price staleness, the shared Job's settings, and the canonical portfolio calendar without exposing
+their internal UIDs. It also queries up to the latest
 2,500 canonical daily values and renders portfolio value and drawdown history. No observation query
 is made for portfolios that the user has not opened.
 

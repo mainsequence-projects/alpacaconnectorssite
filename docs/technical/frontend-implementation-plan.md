@@ -228,6 +228,12 @@ bars-configuration CRUD, signal Job CRUD and lifecycle, durable ETF Portfolio an
 Configuration CRUD, portfolio Job execution, host theme updates, and production
 documentation routes.
 
+On 2026-11-17 the connector stopped creating universes and their sources, signal configurations,
+and ETF portfolios; it keeps only portfolios built from weights an application provides, whose
+creation is the application's capability. The site removed the universe creation form and the
+signal and portfolio create and edit forms. The Universes, ETF Weight Signals, and ETF Portfolios
+pages list, inspect, run, and delete what remains while each Environment is drained.
+
 Holdings snapshots, market-data datasets and observations, portfolio output observations, and other SDK resource views are
 not current site pages and require an explicit frontend scope plus verification against their
 authoritative contracts.

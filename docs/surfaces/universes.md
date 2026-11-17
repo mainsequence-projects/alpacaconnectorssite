@@ -1,15 +1,11 @@
 # Universes
 
-The Universes page separates universe creation from universe execution.
+The Universes page lists, runs, and deletes the registered ETF holdings universes. Universes are
+being retired: the connector keeps only portfolios built from weights an application provides, so
+it no longer creates universes or their holdings sources, and the page has no creation form. The
+registered universes stay available until each Environment has been drained of them.
 
-The **Create universe** form requires a name, ETF ticker, and explicit holdings source URL. Its
-placeholders use iShares IVV only as an example; they are not inferred or submitted values.
-Creation stores or resolves the exact source configuration, creates an empty `AssetCategory`, and
-creates a registered `AssetUniverse` with explicit links to the source and category. The returned
-Universe UID, Source UID, and Asset Category UID remain distinct identities.
-Creation does not extract holdings or change category membership.
-
-After creation, right-click the registered row and choose **Extract components**, then select the Alpaca account
+Right-click a registered row and choose **Extract components**, then select the Alpaca account
 for that execution. The account is not assigned to the Universe. Preflight follows the registered
 `source_uid` and extracts current ETF constituents and weights. Missing Main Sequence assets are
 planned as work, not reported as blockers. Execution uses the selected account to register every

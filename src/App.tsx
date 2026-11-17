@@ -13,7 +13,7 @@ import {
   ResourcePicker,
   type ResourcePickerOption,
 } from "@dev-mainsequence/command-center-sdk/views";
-import { Activity, BookOpen, BriefcaseBusiness, ChartCandlestick, Info, Landmark, Layers3, PackageSearch, Repeat2 } from "lucide-react";
+import { Activity, BookOpen, BriefcaseBusiness, ChartCandlestick, Landmark, Layers3, PackageSearch, Repeat2 } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -28,8 +28,6 @@ import {
   type AssetRegistrationOperationResponse,
   type AssetRegistrationPlanResponse,
   type AssetRegistrationRequest,
-  type AssetUniverse,
-  type AssetUniverseCreateRequest,
   type ProjectConfigurationResponse,
   type ResourceCollection,
 } from "./api";
@@ -90,7 +88,7 @@ const NAVIGATION: NavigationApplicationDefinition = {
           label: "Universes",
           href: "/universes",
           icon: Layers3,
-          description: "Create and run ETF holdings universes",
+          description: "Run and delete ETF holdings universes",
         },
         {
           id: "bars",
@@ -110,7 +108,7 @@ const NAVIGATION: NavigationApplicationDefinition = {
           label: "ETF Weight Signals",
           href: "/signals",
           icon: Activity,
-          description: "Schedule Universe-backed ETF signals",
+          description: "Run and delete Universe-backed ETF signals",
         },
         {
           id: "rebalances",
@@ -124,7 +122,7 @@ const NAVIGATION: NavigationApplicationDefinition = {
           label: "ETF Portfolios",
           href: "/portfolios",
           icon: BriefcaseBusiness,
-          description: "Build scheduled analytical portfolios",
+          description: "Inspect, run, and delete analytical portfolios",
         },
       ],
     },
@@ -552,101 +550,15 @@ function AssetsPage({ transport }: { transport: ApiTransport }) {
 }
 
 function UniversesPage({ transport }: { transport: ApiTransport }) {
-  const [name, setName] = useState("");
-  const [symbol, setSymbol] = useState("");
-  const [sourceUrl, setSourceUrl] = useState("");
-  const [action, setAction] = useState<ActionState<AssetUniverse>>({ state: "idle" });
-  const [universeRefreshKey, setUniverseRefreshKey] = useState(0);
-  const api = useMemo(() => createApiClient(transport), [transport]);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!name.trim() || !symbol.trim() || !sourceUrl.trim()) {
-      setAction({ state: "error", message: "Name, ETF ticker, and holdings source URL are required." });
-      return;
-    }
-    const request: AssetUniverseCreateRequest = {
-      name: name.trim(),
-      symbol: symbol.trim().toUpperCase(),
-      source_url: sourceUrl.trim(),
-    };
-    setAction({ state: "loading", label: "Creating universe" });
-    try {
-      const result = await api.post<AssetUniverse>(API_ENDPOINTS.universes, request);
-      setAction({ state: "success", label: "Universe created", result });
-      setName("");
-      setSymbol("");
-      setSourceUrl("");
-      setUniverseRefreshKey((current) => current + 1);
-    } catch (error) {
-      setAction({ state: "error", message: formatError(error) });
-    }
-  }
-
   return (
     <ApplicationPage as="main" maxWidth="full">
       <ApplicationPageStack>
         <ApplicationPageHeader
           eyebrow="Universes"
-          title="Create and manage ETF holdings universes"
-          description="Each universe stores an ETF holdings source and materializes its components as linked Asset Category membership."
+          title="Manage ETF holdings universes"
+          description="ETF holdings universes are being retired: new universes can no longer be created. Inspect, extract the components of, or delete the registered ones."
         />
-        <ApplicationCard header={<h2>Create universe</h2>}>
-          <form className="workflow-form" onSubmit={submit}>
-            <div className="form-grid">
-              <label className="field">Name
-                <input
-                  type="text"
-                  value={name}
-                  placeholder="iShares Core S&amp;P 500 ETF"
-                  disabled={action.state === "loading"}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </label>
-              <label className="field">ETF ticker
-                <input
-                  type="text"
-                  value={symbol}
-                  placeholder="IVV"
-                  disabled={action.state === "loading"}
-                  onChange={(event) => setSymbol(event.target.value)}
-                />
-              </label>
-              <label className="field field--wide">Holdings source URL
-                <input
-                  type="url"
-                  value={sourceUrl}
-                  placeholder="https://www.ishares.com/us/products/239726/ishares-core-sp-500-etf"
-                  disabled={action.state === "loading"}
-                  onChange={(event) => setSourceUrl(event.target.value)}
-                />
-              </label>
-            </div>
-            <div className="form-actions">
-              <button className="button button--primary" type="submit" disabled={action.state === "loading"}>Create universe</button>
-            </div>
-            <div className="workflow-guidance">
-              <Info aria-hidden="true" size={18} />
-              <p>Creation saves the ETF holdings source and creates the linked empty category. <strong>Extract components</strong> reads current holdings and materializes membership; extracted weights are not stored on the Universe. If missing Alpaca-backed assets must be registered, the account is selected only for that execution and is not stored on the Universe.</p>
-            </div>
-          </form>
-        </ApplicationCard>
-        {action.state === "success" ? (
-          <section className="action-result" aria-live="polite">
-            <div className="section-heading">
-              <h3>{action.label}</h3>
-              <StatusPill tone="success">Complete</StatusPill>
-            </div>
-            <p>Created {action.result.display_name} with Universe UID {action.result.uid}, Source UID {action.result.source_uid}, and Asset Category UID {action.result.asset_category_uid}. It has zero assets until component extraction succeeds.</p>
-          </section>
-        ) : (
-          <ActionResult
-            action={action}
-            errorTitle="Universe request failed"
-            onDismissError={() => setAction({ state: "idle" })}
-          />
-        )}
-        <UniverseResourceList transport={transport} refreshKey={universeRefreshKey} />
+        <UniverseResourceList transport={transport} refreshKey={0} />
       </ApplicationPageStack>
     </ApplicationPage>
   );
