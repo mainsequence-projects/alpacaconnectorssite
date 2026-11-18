@@ -4,8 +4,8 @@ The Assets page registers explicitly selected Alpaca symbols such as `AAPL`, `MS
 It registers exactly those symbols and never expands one into others.
 
 Asset registration requires an active registered Alpaca account. The page sends only its Account UID; the
-API resolves the Main Sequence Secrets referenced by that account and never receives credential
-values from the browser.
+API opens that account's stored, encrypted keys in its own process (connector ADR 0017) and never
+receives key values from the browser.
 
 Build a plan first. The API accepts the work as an observable operation and the page follows its
 stable operation UID. An ordered progress list reports the actual backend boundaries: exact-symbol

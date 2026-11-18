@@ -66,7 +66,8 @@ Backend adapters and contracts:
   fetch goes to the dev server, whose proxy adds the developer's Main Sequence session token, so the
   browser never holds a token. Typed response guards keep
   malformed responses out of the UI. The Accounts route sends Alpaca keys only as write-only
-  request fields that the API stores as Main Sequence Secrets, and never receives them back. The
+  request fields that the API stores encrypted on the account row (connector ADR 0017), and never
+  receives them back. The
   Portfolios route never creates a portfolio or gives one weights: those are the application's
   capabilities.
 
@@ -143,17 +144,16 @@ snapshot as a side effect.
 
 1. Adapt `/v1/accounts` and `/v1/accounts/discovery` with the SDK HTTP resource adapter.
 2. Collect the Alpaca API key and secret key in password fields with autocomplete off; keep them
-   only in component state (ADR 0011, API-managed credential Secrets).
+   only in component state; the API stores them encrypted on the account row (connector ADR 0017).
 3. Review paper or live registrations through the read-only preflight, then register; registration
    always registers missing held assets and creates the initial holdings snapshot in the same flow.
 4. Edit account names and active state without sending credentials, and rotate credentials only
    when both new keys are entered, while keeping the environment immutable.
-5. Delete through an SDK confirmation dialog that explains which credential Secrets are deleted and
-   that historical holdings remain stored.
+5. Remove keys or delete the account through SDK confirmation dialogs that say what each one
+   keeps and deletes (connector ADR 0028).
 
 Exit gate: browser coverage proves review, create, update, rotation, and delete with the exact
-request bodies; no request URL carries a key value and no request reaches the Secret-reference
-endpoint.
+request bodies; no request URL carries a key value and no response carries one.
 
 ### Phase 7 — portfolios built from provided weights
 
@@ -218,7 +218,7 @@ Phases 1 through 7 are complete in this repository. The SDK remained current at 
 and authenticated platform skills were synchronized; the application and same-artifact
 documentation were built; and automated checks covered theme conformance, TypeScript,
 documentation, responsive layout, direct development requests, delegated iframe requests, plan
-gating, account CRUD by Secret reference, bars-configuration CRUD, Rebalance Configuration CRUD,
+gating, account CRUD with encrypted stored keys, bars-configuration CRUD, Rebalance Configuration CRUD,
 portfolio inspection, runs, and owner actions, host theme updates, and production documentation
 routes.
 

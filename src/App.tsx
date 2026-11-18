@@ -491,7 +491,7 @@ function AssetsPage({ transport }: { transport: ApiTransport }) {
               {!accountsLoading && !accountsError && accountOptions.length === 0 ? (
                 <span>No active account is registered. <a href="/accounts">Register an account first.</a></span>
               ) : (
-                <span>Credential values are resolved from the selected account's Main Sequence Secret references.</span>
+                <span>The API uses the selected account's stored, encrypted keys; the browser never sends or receives them.</span>
               )}
             </div>
             <label className="field">Exact Alpaca symbols <span>Comma or space separated</span>
