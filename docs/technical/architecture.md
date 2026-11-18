@@ -122,7 +122,8 @@ actions, pause and resume (`PATCH {scheduled}`) and delete, which retires the po
 connector never names a portfolio's owner and answers anyone else `403`; the site shows those
 actions on every portfolio and reads a `403` as **Only the portfolio's owner can do this.** Every
 portfolio belongs to one account and follows one of its signal definitions (connector ADR 0028);
-one created before that shows **Not adopted** and is not run. A portfolio holds only calculation
+one created before that whose owner does not own its bars' account shows **Not adopted** and works
+as before. A portfolio holds only calculation
 intent: its account, its signal, its own Bars Configuration and its Rebalance Configuration, the
 supported interpolation and valuation parameters (valuation column, maximum price staleness,
 missing-price policy, commission fee), and its `scheduled` flag. Schedule, compute, image, and

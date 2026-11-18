@@ -378,6 +378,9 @@ export interface BarFeedWriteRequest {
   adjustment: string;
 }
 
+/** Edit PATCH of a `portfolios` feed: it keeps its source, so the body carries none. */
+export type PortfoliosFeedUpdateRequest = Omit<BarFeedWriteRequest, "asset_source" | "asset_uids">;
+
 /** Edit PATCH of a portfolio's own configuration: its account and asset source are its portfolio's. */
 export interface PortfolioBarsUpdateRequest {
   name: string;
@@ -491,11 +494,14 @@ export interface PortfolioConfiguration {
   uid: string;
   name: string;
   description: string | null;
-  /** The account the portfolio belongs to; null only before the adopt rollout gives it one. */
+  /** The account the portfolio belongs to; null for a portfolio not yet adopted. */
   account_uid: string | null;
   /** The account's signal definition the portfolio follows; null only before adoption. */
   signal_definition_uid: string | null;
-  /** False for a portfolio created before accounts owned portfolios: it neither runs nor takes weights. */
+  /**
+   * False for a portfolio created before accounts owned portfolios whose owner does not own its
+   * bars' account; it works as before, on its own signal and the bars feed it names.
+   */
   adopted: boolean;
   /** The Main Sequence signal whose weights it follows. */
   signal_uid: string;

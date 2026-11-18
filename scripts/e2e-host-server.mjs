@@ -197,8 +197,8 @@ let barConfigurations = [
     name: "Shared income portfolio prices",
     portfolio_configuration_uid: "portfolio-config-shared",
   }),
-  // A feed of the former model that only a portfolio not yet adopted names; the API refuses to
-  // change it until the adopt rollout deletes it.
+  // A `portfolios` feed of the account: it prices the portfolio not yet adopted that names it, as
+  // before accounts owned portfolios, and the API keeps it while that portfolio names it.
   barsConfiguration({
     uid: "bars-legacy-portfolios",
     name: "Legacy portfolio prices",
@@ -206,7 +206,8 @@ let barConfigurations = [
     account_uid: "account-paper",
   }),
 ];
-const BAR_FEED_ASSET_SOURCES = ["assets", "account_holdings"];
+// A feed may also be a `portfolios` feed, as before accounts owned portfolios.
+const BAR_FEED_ASSET_SOURCES = ["assets", "account_holdings", "portfolios"];
 // The Job alpaca-connectors declares in its API workflow (connector ADR 0013): every portfolio
 // configuration runs on it.
 function declaredJob(uid, expression) {
@@ -335,8 +336,9 @@ let portfolioConfigurations = [
     latest_run_at: "2026-01-03T15:00:00Z",
     updated_at: "2026-01-03T15:00:00Z",
   }),
-  // Created before accounts owned portfolios: no account or signal definition until the adopt
-  // rollout gives it one; it neither runs nor takes weights.
+  // Created before accounts owned portfolios, by an owner who does not own its bars' account: no
+  // account or signal definition of its own. It works as before, on its own signal and the feed
+  // it names.
   portfolioConfiguration({
     uid: "portfolio-config-legacy",
     name: "Legacy growth portfolio",
@@ -352,13 +354,6 @@ let portfolioConfigurations = [
     updated_at: "2026-01-01T00:00:00Z",
   }),
 ];
-const PORTFOLIO_NOT_ADOPTED = {
-  detail: {
-    code: "portfolio_not_adopted",
-    message: "This portfolio was created before accounts owned portfolios and has no account yet; it does not run or take weights until the portfolio adopt rollout gives it one or ends it.",
-    retryable: false,
-  },
-};
 
 // The one kind of signal the connector makes (connector ADR 0028): it belongs to one account, its
 // key is the application's, and only that account's portfolios follow it.
@@ -459,6 +454,17 @@ function collection(items, url) {
 }
 
 // What deleting the account deletes, and what refuses it (connector ADR 0028, decision 8).
+// The account's portfolios, and those not yet adopted that its `portfolios` feeds price: they run
+// with its keys, so they end with it.
+function accountPortfolios(accountUid) {
+  const feeds = new Set(barConfigurations
+    .filter((item) => item.account_uid === accountUid && item.asset_source === "portfolios")
+    .map((item) => item.uid));
+  return portfolioConfigurations.filter((item) => (
+    item.account_uid === accountUid || (!item.adopted && feeds.has(item.bars_configuration_uid))
+  ));
+}
+
 function accountDeletePreflight(accountUid) {
   const blockers = accountDeleteBlockers.get(accountUid) ?? [];
   return {
@@ -466,7 +472,7 @@ function accountDeletePreflight(accountUid) {
     allowed: blockers.length === 0,
     blockers,
     warnings: [],
-    portfolio_count: portfolioConfigurations.filter((item) => item.account_uid === accountUid).length,
+    portfolio_count: accountPortfolios(accountUid).length,
     signal_definition_count: signalDefinitions.filter((item) => item.account_uid === accountUid).length,
     bars_feed_count: barConfigurations.filter((item) => item.account_uid === accountUid).length,
     ended_portfolio_count: 0,
@@ -1394,7 +1400,7 @@ createServer(async (request, response) => {
         });
       }
       // Everything that belongs to the account goes with it.
-      const ended = portfolioConfigurations.filter((item) => item.account_uid === uid);
+      const ended = accountPortfolios(uid);
       const endedUids = new Set(ended.map((item) => item.uid));
       const definitions = signalDefinitions.filter((item) => item.account_uid === uid);
       portfolioConfigurations = portfolioConfigurations.filter((item) => !endedUids.has(item.uid));
@@ -1492,7 +1498,7 @@ createServer(async (request, response) => {
     // A feed only: a portfolio's own configuration is created with its portfolio.
     if (!BAR_FEED_ASSET_SOURCES.includes(body.asset_source)) {
       return sendJson(response, 422, {
-        detail: [{ loc: ["body", "asset_source"], msg: "Input should be 'assets' or 'account_holdings'", type: "literal_error" }],
+        detail: [{ loc: ["body", "asset_source"], msg: "Input should be 'assets', 'account_holdings' or 'portfolios'", type: "literal_error" }],
       });
     }
     if (!body.account_uid) {
@@ -1523,7 +1529,8 @@ createServer(async (request, response) => {
       if (portfolioOwned && PORTFOLIOS_OF_ANOTHER_OWNER.has(current.portfolio_configuration_uid)) {
         return sendJson(response, 403, PORTFOLIO_OWNED_BY_ANOTHER);
       }
-      if (!portfolioOwned && ACCOUNTS_OF_ANOTHER_OWNER.has(current.account_uid)) {
+      // A feed may not run with another owner's account (ADR 0022); its delete checks no owner.
+      if (request.method === "PATCH" && !portfolioOwned && ACCOUNTS_OF_ANOTHER_OWNER.has(current.account_uid)) {
         return sendJson(response, 409, ACCOUNT_OWNED_BY_ANOTHER);
       }
     }
@@ -1541,7 +1548,7 @@ createServer(async (request, response) => {
             code: "action_conflict",
             message: portfolioOwned
               ? "A portfolio's own bars configuration prices its portfolio's assets."
-              : "A bars feed prices explicit assets or its account's holdings; a portfolio's own bars configuration is created with the portfolio.",
+              : "Unsupported asset source.",
             retryable: false,
           },
         });
@@ -1557,6 +1564,15 @@ createServer(async (request, response) => {
       if (portfolioOwned) {
         return sendJson(response, 409, {
           detail: { code: "action_conflict", message: "This bars configuration belongs to a portfolio; it is deleted with the portfolio.", retryable: false },
+        });
+      }
+      if (portfolioConfigurations.some((item) => item.bars_configuration_uid === uid)) {
+        return sendJson(response, 409, {
+          detail: {
+            code: "action_conflict",
+            message: "Portfolios not yet adopted name this bars feed, which prices them; it stays while they do.",
+            retryable: false,
+          },
         });
       }
       const [deleted] = barConfigurations.splice(index, 1);
@@ -1670,7 +1686,6 @@ createServer(async (request, response) => {
     const uid = decodeURIComponent(portfolioActionMatch[1]);
     const index = portfolioConfigurations.findIndex((configuration) => configuration.uid === uid);
     if (index < 0) return sendJson(response, 404, { detail: "Portfolio configuration not found." });
-    if (!portfolioConfigurations[index].adopted) return sendJson(response, 409, PORTFOLIO_NOT_ADOPTED);
     const now = new Date().toISOString();
     portfolioConfigurations[index] = {
       ...portfolioConfigurations[index],

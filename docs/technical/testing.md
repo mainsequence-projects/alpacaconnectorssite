@@ -21,8 +21,9 @@ registration, and credential rotation with keys stored encrypted by the API, rem
 keys (one account and the bulk action) and storing new ones, the account delete preflight with its
 counts, a blocked delete that changes nothing, the delete with its exact confirmation, the account
 owner's refusals, bars-feed CRUD over the two feed sources, a portfolio's own bars configuration
-(no account or source sent, no delete), the detail of a portfolio with its account and signal,
-the account and signal filters, a portfolio not yet adopted that is not run, portfolio run and
+(no account or source sent, no delete), a `portfolios` feed edited without its source and kept
+while portfolios name it, the detail of a portfolio with its account and signal, the account and
+signal filters, a portfolio not yet adopted that runs like any other, portfolio run and
 delete with no create or edit form, the owner-only refusal (`403`, read as "Only the portfolio's
 owner can do this."), the Signals list, detail, rename and delete, rebalance create and edit, the
 portfolio scheduled-run toggle (`PATCH {scheduled}`) with the shared Job's schedule shown
@@ -40,7 +41,8 @@ fields with 422, including the retired `portfolio_prices_frequency` and `forward
 any strategy other than `calendar_event_signal`, applies the connector's defaults, and serves the
 API's discovery columns and filters. It mirrors the account-owned model of connector ADR 0028: two
 accounts, the second another owner's (`409 account_owned_by_another`); signal definitions; one
-bars configuration per portfolio; a portfolio not yet adopted (`409 portfolio_not_adopted` on run);
+bars configuration per portfolio; a portfolio not yet adopted, which runs as before, and the
+`portfolios` feed it names, which the fixture refuses to delete while it does;
 the account delete preflight and its exact confirmation, with blockers that tests set through the
 mock-only `POST /__account-delete-blockers`; and the connector's signal and portfolio create
 routes, which only tests call, to give a new account something to delete. It refuses a change to a

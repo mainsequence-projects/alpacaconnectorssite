@@ -60,7 +60,9 @@ This repository is the Command Center static-site application for the Alpaca Con
   Center link depend on them, and the Alpaca Agent hands people that link for key entry.
 - Bars: create, list, edit, and delete the bars feeds of accounts (`assets` or `account_holdings`)
   with an already-migrated market-data profile. A portfolio's own configuration (`portfolios`)
-  comes and goes with its portfolio: edit it without its account or source, never delete it.
+  comes and goes with its portfolio: edit it without its account or source, never delete it. A
+  `portfolios` feed of an account keeps its source when edited. Never block what the connector
+  allows; mirror its refusals only.
 - Portfolios: the connector keeps only portfolios built from weights an application provides
   (decided 2026-11-17, connector ADR 0024); each belongs to one account and follows one of its
   signals (connector ADR 0028). Creating a portfolio or a signal and giving weights are the

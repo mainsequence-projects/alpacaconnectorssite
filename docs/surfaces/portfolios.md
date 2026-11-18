@@ -41,10 +41,10 @@ The list shows each portfolio's **Account** and **Signal**, and its **Account** 
 filters narrow it to one account's portfolios or to those following one signal; the signal filter
 offers the selected account's signals.
 
-A portfolio created before accounts owned portfolios shows **Not adopted** until the connector's
-adopt rollout gives it its account and a signal, or ends it. It does not run or take weights until
-then: **Run now** is not offered, the connector refuses a run with `409 portfolio_not_adopted`, and
-its detail explains why.
+A portfolio created before accounts owned portfolios, whose owner does not own the account its
+bars run on, shows **Not adopted**: it has no account of its own. It works exactly as before: it
+takes weights on its own signal, runs on the bars feed it names, and **Run now** works as for any
+other portfolio. Its detail says so.
 
 The portfolio is the source of truth for calculation intent and for its scheduled flag. It does not
 copy the Bars Configuration's source table or any Job schedule, compute, image, or deployment
@@ -122,8 +122,8 @@ fills, volume participation, market impact, or slippage beyond the configured co
 
 ## Running and inspecting
 
-Use **Run now** only after the shared Job image is ready and the portfolio has its account; it works
-whether or not the portfolio is paused. The connector refuses a run while the portfolio's previous run is still pending or running,
+Use **Run now** only after the shared Job image is ready; it works whether or not the portfolio is
+paused. The connector refuses a run while the portfolio's previous run is still pending or running,
 or while its preflight is blocked: a run requires existing, enabled linked configurations and
 weights, plus source bars for the weighted assets and the migrated persistent interpolation
 storage. The portfolio run updates interpolation and calculates the ms-markets portfolio without

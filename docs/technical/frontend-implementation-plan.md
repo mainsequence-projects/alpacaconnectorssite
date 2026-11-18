@@ -174,8 +174,8 @@ refusal, and that the portfolio pages send no create or edit request.
    **Delete** shows the connector's delete preflight and deletes the account and everything it
    owns with the exact confirmation `confirm=DELETE <account uid>`. Show whether keys are stored,
    removed, or awaiting migration.
-2. Portfolios: show each portfolio's account and signal, filter by them, show a portfolio not yet
-   adopted and never run it.
+2. Portfolios: show each portfolio's account and signal, filter by them, and show a portfolio not
+   yet adopted, which runs as before (connector ADR 0028, amended 2026-11-18).
 3. Signals: list, inspect with the latest weights and the portfolios that follow it, rename, and
    delete one no portfolio follows. Never create a signal or publish weights.
 4. Bars: create feeds only; edit a portfolio's own configuration without its account or source,

@@ -780,10 +780,6 @@ test("keeps a portfolio's own bars configuration with its portfolio", async ({ p
     adjustment: "all",
   }]);
 
-  // A feed only portfolios not yet adopted name cannot change until the rollout deletes it.
-  const legacy = page.getByRole("row", { name: /Legacy portfolio prices/ });
-  await expect(legacy).toContainText("Assets of the portfolios that name it");
-  await expect(legacy.getByRole("button", { name: "Edit" })).toBeDisabled();
 
   await page.getByRole("button", { name: "Belongs to", exact: true }).click();
   await page.getByRole("option", { name: "Portfolios' own" }).click();
@@ -966,23 +962,59 @@ test("filters portfolios by account and signal", async ({ page }) => {
   expect(listQueries.at(-1)?.get("signal_definition_uid")).toBe("signal-def-income");
 });
 
-test("shows a portfolio not yet adopted without letting it run", async ({ page }) => {
-  const runs: string[] = [];
-  page.on("request", (request) => {
-    if (new URL(request.url()).pathname.endsWith("/actions/run")) runs.push(request.url());
-  });
-
+test("runs a portfolio not yet adopted like any other", async ({ page }) => {
   await page.goto("/portfolios");
   const row = page.getByRole("row", { name: /Legacy growth portfolio/ });
   await expect(row).toContainText("Not adopted");
-  await expect(row.getByRole("button", { name: "Run now", exact: true })).toBeDisabled();
+  await row.getByRole("button", { name: "Run now", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /Legacy growth portfolio: JobRun/ })).toBeVisible();
   await row.getByText("Legacy growth portfolio", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Legacy growth portfolio" })).toBeVisible();
-  await expect(page.getByText("created before accounts owned portfolios and has no account yet", { exact: false })).toBeVisible();
+  await expect(page.getByText("It works as before", { exact: false })).toBeVisible();
   const valuation = page.locator("details").filter({ hasText: "Valuation source" });
   await valuation.locator("summary").click();
-  await expect(valuation.getByText(/ · a feed it named before adoption$/)).toBeVisible();
-  expect(runs).toEqual([]);
+  await expect(valuation.getByText(/ · the feed it names$/)).toBeVisible();
+});
+
+test("edits a portfolios feed without its source and keeps it while portfolios name it", async ({ page }) => {
+  const patches: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "PATCH" && url.pathname === "/v1/market-data/bar-configurations/bars-legacy-portfolios") {
+      patches.push(request.postDataJSON() as Record<string, unknown>);
+    }
+  });
+
+  await page.goto("/bars");
+  const legacy = page.getByRole("row", { name: /Legacy portfolio prices/ });
+  await expect(legacy).toContainText("Assets of the portfolios that name it");
+  await legacy.getByRole("button", { name: "Edit" }).click();
+  const form = page.locator("form.workflow-form");
+  await expect(page.getByRole("heading", { name: "Edit bars feed" })).toBeVisible();
+  await expect(form.getByLabel("Asset source")).toHaveValue("Every asset of the portfolios not yet adopted that name it");
+  await form.getByLabel("Name").fill("Legacy portfolio prices renamed");
+  await form.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("heading", { name: "Updated Legacy portfolio prices renamed." })).toBeVisible();
+  // It keeps its source: the edit sends none.
+  expect(patches).toEqual([{
+    name: "Legacy portfolio prices renamed",
+    description: "The prices portfolios used before accounts owned them.",
+    enabled: true,
+    scheduled: true,
+    frequency_id: "1d",
+    feed: "sip",
+    adjustment: "all",
+    account_uid: "account-paper",
+  }]);
+
+  const renamed = page.getByRole("row", { name: /Legacy portfolio prices renamed/ });
+  await renamed.getByRole("button", { name: "Delete" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete bars feed" });
+  await dialog.getByLabel("Confirmation word").fill("DELETE");
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(dialog.getByText("Portfolios not yet adopted name this bars feed", { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(renamed).toBeVisible();
 });
 
 test("tells a person who does not own a portfolio that only its owner can pause or delete it", async ({ page }) => {

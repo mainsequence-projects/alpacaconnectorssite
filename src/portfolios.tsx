@@ -75,7 +75,7 @@ type PortfolioSection = "portfolios" | "rebalances";
 
 const PORTFOLIO_OBSERVATION_LIMIT = 2_500;
 /** The API's words for a portfolio created before accounts owned portfolios (connector ADR 0028). */
-const NOT_ADOPTED_EXPLANATION = "This portfolio was created before accounts owned portfolios and has no account yet. It does not run or take weights until the operator's portfolio adopt rollout gives it its account, or ends it.";
+const NOT_ADOPTED_EXPLANATION = "This portfolio was created before accounts owned portfolios, and its owner does not own the account its bars run on, so it has no account of its own. It works as before: it takes weights on its own signal and runs on the bars feed it names.";
 const REBALANCE_STRATEGY_LABEL = "CalendarEventSignal";
 const WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 /** NYSE regular sessions fall on Monday through Friday only. */
@@ -935,7 +935,7 @@ function PortfolioDetail({
                 <section className="portfolio-detail-subpanel">
                   <h3>Alpaca bars</h3>
                   <dl className="portfolio-detail-tree">
-                    <div><dt>Bars configuration</dt><dd>{detail.linked_bars.name}{detail.adopted ? " · the portfolio's own" : " · a feed it named before adoption"}</dd></div>
+                    <div><dt>Bars configuration</dt><dd>{detail.linked_bars.name}{detail.adopted ? " · the portfolio's own" : " · the feed it names"}</dd></div>
                     <div><dt>Bars description</dt><dd>{detail.linked_bars.description ?? "No description"}</dd></div>
                     <div><dt>Daily bars update</dt><dd>{detail.linked_bars.enabled ? (detail.linked_bars.scheduled ? "Included" : "On demand") : "Disabled"}</dd></div>
                     <div><dt>Source account</dt><dd>{detail.linked_bars.account_name} · {formatEnvironment(detail.linked_bars.account_environment)}</dd></div>
@@ -1151,8 +1151,7 @@ export function PortfoliosPage({
     {
       id: "run-portfolio",
       label: "Run now",
-      // A portfolio not yet adopted does not run (connector ADR 0028); the API refuses it too.
-      disabled: (item) => !item.adopted || item.job?.image_status !== "ready",
+      disabled: (item) => item.job?.image_status !== "ready",
       onSelect: (item) => void runPortfolio(item),
     },
     { id: "delete-portfolio", label: "Delete", tone: "danger", onSelect: setDeletePortfolioTarget },

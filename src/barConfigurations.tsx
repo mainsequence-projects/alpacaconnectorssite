@@ -33,6 +33,7 @@ import {
   type BarFeedAssetSource,
   type BarFeedWriteRequest,
   type PortfolioBarsUpdateRequest,
+  type PortfoliosFeedUpdateRequest,
   type PortfolioConfiguration,
   type ProjectConfigurationResponse,
   type ResourceCollection,
@@ -101,8 +102,8 @@ function isPortfolioOwned(configuration: BarConfiguration): boolean {
 }
 
 /**
- * A feed of the former model that prices the portfolios naming it. Only portfolios not yet adopted
- * name one; the API refuses to change it, and the adopt rollout deletes it (connector ADR 0028).
+ * A `portfolios` feed of an account: it prices the portfolios not yet adopted that name it, as
+ * before accounts owned portfolios, and the API keeps it while they do (connector ADR 0028).
  */
 function isLegacyPortfoliosFeed(configuration: BarConfiguration): boolean {
   return !isPortfolioOwned(configuration) && configuration.asset_source === "portfolios";
@@ -272,13 +273,7 @@ function BarConfigurationList({
     onChange: setParentFilter,
   }], [parentFilter]);
   const rowActions = useMemo<readonly ResourceRowAction<BarConfiguration>[]>(() => [
-    {
-      id: "edit-bars-configuration",
-      label: "Edit",
-      // The API refuses any change to a feed only portfolios not yet adopted name.
-      disabled: isLegacyPortfoliosFeed,
-      onSelect: onEdit,
-    },
+    { id: "edit-bars-configuration", label: "Edit", onSelect: onEdit },
     {
       id: "delete-bars-configuration",
       label: "Delete",
@@ -393,8 +388,11 @@ export function BarsConfigurationsPage({
     if (!profile && profiles[0]) setProfile(profiles[0]);
   }, [profile, profiles]);
 
-  // A portfolio's own configuration takes its account and assets from its portfolio.
+  // A portfolio's own configuration takes its account and assets from its portfolio; a
+  // `portfolios` feed keeps its source.
   const editingPortfolioOwned = editing !== null && isPortfolioOwned(editing);
+  const editingPortfoliosFeed = editing !== null && isLegacyPortfoliosFeed(editing);
+  const fixedSource = editingPortfolioOwned || editingPortfoliosFeed;
   const editingPortfolioName = editing?.portfolio_configuration_uid
     ? portfolioLookup.byUid.get(editing.portfolio_configuration_uid)?.name
       ?? shortUid(editing.portfolio_configuration_uid)
@@ -404,7 +402,7 @@ export function BarsConfigurationsPage({
     ...(profile ? [profile] : []),
   ])).map(profilePickerOption);
   const busy = mutation.state === "loading";
-  const sourceIsValid = editingPortfolioOwned
+  const sourceIsValid = fixedSource
     || assetSource === "account_holdings"
     || (assetSource === "assets" && normalizeUidList(assetUids).length > 0);
   const canSubmit = !busy
@@ -427,7 +425,6 @@ export function BarsConfigurationsPage({
   }
 
   function beginEdit(configurationToEdit: BarConfiguration) {
-    if (isLegacyPortfoliosFeed(configurationToEdit)) return;
     setEditing(configurationToEdit);
     setName(configurationToEdit.name);
     setDescription(configurationToEdit.description ?? "");
@@ -462,14 +459,17 @@ export function BarsConfigurationsPage({
       feed,
       adjustment,
     };
-    const request: BarFeedWriteRequest | PortfolioBarsUpdateRequest = editingPortfolioOwned
-      ? common
-      : {
-        ...common,
-        account_uid: accountUid,
-        asset_source: assetSource,
-        asset_uids: assetSource === "assets" ? normalizeUidList(assetUids) : [],
-      };
+    const request: BarFeedWriteRequest | PortfoliosFeedUpdateRequest | PortfolioBarsUpdateRequest =
+      editingPortfolioOwned
+        ? common
+        : editingPortfoliosFeed
+          ? { ...common, account_uid: accountUid }
+          : {
+            ...common,
+            account_uid: accountUid,
+            asset_source: assetSource,
+            asset_uids: assetSource === "assets" ? normalizeUidList(assetUids) : [],
+          };
     const actionLabel = editing ? "Updating bars configuration" : "Creating bars feed";
     setMutation({ state: "loading", label: actionLabel });
     try {
@@ -574,9 +574,14 @@ export function BarsConfigurationsPage({
                   disabled={busy}
                 />
               </label>
-              {editingPortfolioOwned ? (
+              {fixedSource ? (
                 <label className="field">Asset source
-                  <input readOnly value="Every asset its portfolio's signal has published" />
+                  <input
+                    readOnly
+                    value={editingPortfolioOwned
+                      ? "Every asset its portfolio's signal has published"
+                      : "Every asset of the portfolios not yet adopted that name it"}
+                  />
                 </label>
               ) : (
                 <div className="field resource-picker-field">
@@ -608,7 +613,7 @@ export function BarsConfigurationsPage({
                   value={profile || null}
                 />
               </div>
-              {!editingPortfolioOwned && assetSource === "assets" ? (
+              {!fixedSource && assetSource === "assets" ? (
                 <label className="field field--wide">Registered Asset UIDs <span>Comma, space, or line separated</span>
                   <textarea
                     rows={4}
@@ -660,13 +665,17 @@ export function BarsConfigurationsPage({
                 <p>
                   This is its portfolio&apos;s own bars configuration. It prices every asset the portfolio&apos;s signal has published, with the portfolio&apos;s account&apos;s keys, into the shared table of its bars profile. It is created and deleted with its portfolio, and only the portfolio&apos;s owner changes it. The selected profile must already be migrated.
                 </p>
+              ) : editingPortfoliosFeed ? (
+                <p>
+                  This feed prices every asset of the portfolios not yet adopted that name it, as before accounts owned portfolios, with its account&apos;s keys. It keeps its source, and it can&apos;t be deleted while those portfolios name it. A feed can&apos;t run with another owner&apos;s account. The selected profile must already be migrated.
+                </p>
               ) : assetSource === "assets" ? (
                 <p>
-                  This stores configuration only. <strong>Explicit assets</strong> uses exactly the registered Main Sequence Asset UIDs entered above. Only the account&apos;s owner creates or changes its feeds. The selected profile must already be migrated.
+                  This stores configuration only. <strong>Explicit assets</strong> uses exactly the registered Main Sequence Asset UIDs entered above. A feed can&apos;t run with another owner&apos;s account. The selected profile must already be migrated.
                 </p>
               ) : (
                 <p>
-                  This stores configuration only. <strong>Latest account holdings</strong> resolves the newest persisted snapshot from the trailing 30 days and never captures holdings as a side effect. Only the account&apos;s owner creates or changes its feeds. The selected profile must already be migrated.
+                  This stores configuration only. <strong>Latest account holdings</strong> resolves the newest persisted snapshot from the trailing 30 days and never captures holdings as a side effect. A feed can&apos;t run with another owner&apos;s account. The selected profile must already be migrated.
                 </p>
               )}
             </div>

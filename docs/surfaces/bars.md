@@ -6,7 +6,7 @@ does not resolve assets, capture holdings, or publish bars.
 A bars configuration has exactly one parent (connector ADR 0028):
 
 - a **bars feed** belongs to one account, runs with that account's keys, and is deleted with it.
-  Only the account's owner creates, changes or deletes its feeds; or
+  A feed can't run with another owner's account; an account without an owner stays open; or
 - a **portfolio's own** bars configuration belongs to its portfolio. The application creates it
   with the portfolio, it prices every asset the portfolio's signal has published with the
   portfolio's account's keys, and it is deleted only with its portfolio.
@@ -72,10 +72,12 @@ read-only, and changes only its name, description, status, daily update, and pro
 never sends an account or an asset source. **Delete** is not offered: the configuration goes with
 its portfolio. Only the portfolio's owner, its account's owner, changes it.
 
-Until the connector's adopt rollout has run, a portfolio created before accounts owned portfolios
-still names a feed of the former model, shown with the source **Assets of the portfolios that name
-it**. The connector refuses to change such a feed, so **Edit** is not offered; the rollout deletes
-it once no portfolio names it.
+A portfolio not yet adopted still names a `portfolios` feed of an account, shown with the source
+**Assets of the portfolios that name it**; it prices those portfolios, as before accounts owned
+portfolios. **Edit** keeps its source read-only and sends none, so it stays a `portfolios` feed.
+**Delete** is refused while portfolios name it, and the dialog shows the connector's message. The
+connector also still accepts new `portfolios` feeds; the form doesn't offer them, since every new
+portfolio prices itself with its own configuration.
 
 The table is backed by the canonical collection and discovery endpoints, whose discovery declares
 its columns and filters.
