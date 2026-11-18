@@ -67,9 +67,7 @@ something differs from the stored registration.
 The **Rotate credentials** section of the edit form replaces the stored keys. Leave both fields
 empty to keep the current credentials. To rotate, enter both the new API key and the new secret
 key; the API checks that they authenticate as the same Alpaca account and then replaces the
-stored keys. An account registered before keys were stored encrypted, whose keys still live in
-Main Sequence Secrets, switches to encrypted storage when rotated; the Secrets it was imported
-from are left unchanged. The fields are cleared after saving or cancelling.
+stored keys. The fields are cleared after saving or cancelling.
 
 After the owner removed an account's keys, the section says so: entering both new keys stores them
 again, and the account's portfolios and bars feeds run with them.
@@ -79,7 +77,7 @@ again, and the account's portfolios and bars feeds run with them.
 Selecting an account row opens that account's detail view. It shows how the credentials were
 provided (**Stored by this application** for keys entered here, **Imported from Main Sequence
 Secrets** for keys the connector copied once from Secrets named through its CLI or Agent), whether
-the keys are **Stored encrypted**, **Removed** by the owner, or still **Awaiting migration**, and
+the keys are **Stored encrypted** or **Removed** by the owner, and
 when the credentials were last updated; the account list's **Keys** column shows the same state. It
 never shows key values or Secret names. Only after the row is selected does the application query
 `/v1/accounts/{account_uid}/holdings/latest`; the account collection never preloads holdings
@@ -97,9 +95,7 @@ account is registered to another owner.**
 (`POST /v1/accounts/{account_uid}/actions/remove-keys`). The owner, the account, its history, its
 portfolios, signals and bars feeds stay, and nothing is disabled: runs on the account fail until its
 owner enters keys again with **Edit**. The row then shows **Removed** keys and no longer offers the
-action. Main Sequence Secrets the keys were imported from are kept; for an account registered
-before encrypted storage and not yet migrated, the Secrets this application created for it are
-deleted, and the result names them. To remove the keys of several accounts at once, select their
+action. Main Sequence Secrets the keys were imported from are kept. To remove the keys of several accounts at once, select their
 rows and choose **Remove keys** from the selection's **Actions**: the connector's bulk action, which
 checks the selection with its preflight first.
 

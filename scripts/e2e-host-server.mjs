@@ -488,7 +488,7 @@ function removeAccountKeys(accountUid) {
     credentials_updated_at: new Date().toISOString(),
     credentials_updated_by_user_uid: "user-e2e",
   };
-  return { account_uid: accountUid, keys_removed: true, deleted_secrets: [], warnings: [] };
+  return { account_uid: accountUid, keys_removed: true };
 }
 // Mirrors the API's refusal of a change by anyone but the portfolio's owner; it never names the owner.
 const PORTFOLIOS_OF_ANOTHER_OWNER = new Set(["portfolio-config-shared"]);
@@ -1417,9 +1417,6 @@ createServer(async (request, response) => {
         kept_portfolio_uids: [],
         deleted_signal_uids: definitions.map((item) => item.signal_uid),
         kept_signal_uids: [],
-        // Keys are stored encrypted on the row (connector ADR 0017); nothing lives in Secrets.
-        deleted_secrets: [],
-        warnings: [],
         markets: null,
       });
     }

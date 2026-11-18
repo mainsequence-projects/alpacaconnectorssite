@@ -80,14 +80,10 @@ export interface Account {
   is_paper: boolean;
   /**
    * `managed`: keys a person entered through this site or the API; `imported`: keys copied once
-   * from Main Sequence Secrets selected by name; `external`: a registration made before the keys
-   * were stored encrypted, not migrated yet (connector ADR 0017).
+   * from Main Sequence Secrets selected by name (connector ADR 0017).
    */
-  credential_source: "managed" | "imported" | "external";
-  /**
-   * False once the owner removed the keys (`credentials_removed`), and while a registration made
-   * before encrypted storage awaits the credential migration.
-   */
+  credential_source: "managed" | "imported";
+  /** False once the owner removed the keys (`credentials_removed`). */
   credentials_stored: boolean;
   /** The owner removed the keys; runs fail until keys are entered again. Absent before 0029's API. */
   credentials_removed?: boolean;
@@ -214,9 +210,6 @@ export interface AccountUpdateRequest {
 export interface AccountKeysRemovedResponse {
   account_uid: string;
   keys_removed: boolean;
-  /** Main Sequence Secrets deleted with a registration made before encrypted storage; else empty. */
-  deleted_secrets: string[];
-  warnings: string[];
 }
 
 /**
@@ -245,9 +238,6 @@ export interface AccountDeleteResponse {
   kept_portfolio_uids: string[];
   deleted_signal_uids: string[];
   kept_signal_uids: string[];
-  /** Main Sequence Secrets deleted with a registration made before encrypted storage; else empty. */
-  deleted_secrets?: string[];
-  warnings?: string[];
 }
 
 export interface AssetRegistrationRequest {

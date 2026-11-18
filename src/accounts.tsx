@@ -110,21 +110,19 @@ function formatAccountValue(value: string | number | null, currency: string | nu
   }
 }
 
-type KeysState = "stored" | "removed" | "awaiting-migration";
+type KeysState = "stored" | "removed";
 
 /**
- * Stored; removed by the owner (connector ADR 0028), when runs fail until keys are entered again;
- * or still in Main Sequence Secrets, awaiting the credential migration (connector ADR 0017).
+ * Stored, or removed by the owner (connector ADR 0028), when runs fail until keys are entered
+ * again. A registration is always made with its keys (connector issue #13).
  */
 function keysState(account: Account): KeysState {
-  if (account.credentials_stored) return "stored";
-  return account.credentials_removed ? "removed" : "awaiting-migration";
+  return account.credentials_stored ? "stored" : "removed";
 }
 
 const KEYS_STATE_LABELS: Record<KeysState, string> = {
   stored: "Stored encrypted",
   removed: "Removed",
-  "awaiting-migration": "Awaiting migration",
 };
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
@@ -189,9 +187,6 @@ function deletionDetails(result: AccountDeleteResponse): string[] {
     details.push(
       `${plural(result.kept_portfolio_uids.length, "retired Portfolio")} stay${result.kept_portfolio_uids.length === 1 ? "s" : ""} because another account's history names ${result.kept_portfolio_uids.length === 1 ? "it" : "them"}, with ${plural(result.kept_signal_uids.length, "signal")} ${result.kept_portfolio_uids.length === 1 ? "it follows" : "they follow"}.`,
     );
-  }
-  if (result.deleted_secrets?.length) {
-    details.push(`Deleted stored credential Secrets: ${result.deleted_secrets.join(", ")}.`);
   }
   return details;
 }
@@ -543,8 +538,6 @@ function credentialSourceLabel(source: Account["credential_source"]): string {
       return "Stored by this application";
     case "imported":
       return "Imported from Main Sequence Secrets";
-    default:
-      return "Main Sequence Secrets, not migrated yet";
   }
 }
 
@@ -1053,7 +1046,6 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
         {},
       );
       const targetName = removeKeysTarget.account_name;
-      const deletedSecrets = result.deleted_secrets ?? [];
       if (editing?.uid === removeKeysTarget.uid) {
         resetForm();
         setFormOpen(false);
@@ -1065,11 +1057,7 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
         message: `Removed the keys of ${targetName}.`,
         details: [
           "The account, its portfolios, signals and bars feeds stay; their runs fail until keys are entered again with Edit.",
-          ...(deletedSecrets.length
-            ? [`Deleted stored credential Secrets: ${deletedSecrets.join(", ")}.`]
-            : []),
         ],
-        warnings: result.warnings ?? [],
       });
       setRefreshKey((current) => current + 1);
     } catch (error) {
@@ -1124,7 +1112,6 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
         state: "success",
         message: `Deleted ${deletedName} and everything that belonged to it.`,
         details: deletionDetails(result),
-        warnings: result.warnings ?? [],
       });
       setRefreshKey((current) => current + 1);
     } catch (error) {
@@ -1223,9 +1210,6 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
                       <p>
                         Leave both fields empty to keep the current credentials. New keys must
                         authenticate as the same Alpaca account and replace the stored values.
-                        {keysState(editing) === "awaiting-migration"
-                          ? " This account's keys still live in Main Sequence Secrets; rotating stores the new keys encrypted on the account and leaves Secrets this application did not create unchanged."
-                          : null}
                       </p>
                     )}
                   </div>
