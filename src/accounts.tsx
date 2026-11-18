@@ -7,6 +7,8 @@ import {
 import {
   createHttpResourceAdapter,
   defineResourceApplication,
+  type ResourceBulkActionPreflightImpact,
+  type ResourceBulkActionPreflightState,
   type ResourceHttpClient,
   type ResourceHttpRequest,
 } from "@dev-mainsequence/command-center-sdk/resource";
@@ -25,10 +27,15 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   API_ENDPOINTS,
   ApiResponseError,
+  accountDeletePath,
+  accountDeletePreflightPath,
   accountKeyRequestCancelPath,
+  accountRemoveKeysPath,
   createApiClient,
   type Account,
+  type AccountDeletePreflightResponse,
   type AccountDeleteResponse,
+  type AccountKeysRemovedResponse,
   type AccountHolding,
   type AccountKeyRequest,
   type AccountKeyRequestCollection,
@@ -103,6 +110,92 @@ function formatAccountValue(value: string | number | null, currency: string | nu
   }
 }
 
+type KeysState = "stored" | "removed" | "awaiting-migration";
+
+/**
+ * Stored; removed by the owner (connector ADR 0028), when runs fail until keys are entered again;
+ * or still in Main Sequence Secrets, awaiting the credential migration (connector ADR 0017).
+ */
+function keysState(account: Account): KeysState {
+  if (account.credentials_stored) return "stored";
+  return account.credentials_removed ? "removed" : "awaiting-migration";
+}
+
+const KEYS_STATE_LABELS: Record<KeysState, string> = {
+  stored: "Stored encrypted",
+  removed: "Removed",
+  "awaiting-migration": "Awaiting migration",
+};
+
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
+/** The delete preflight as the confirmation dialog's preflight panel shows it. */
+function deletePreflightState(
+  preflight: AccountDeletePreflightResponse,
+): ResourceBulkActionPreflightState<string> {
+  const impacts: ResourceBulkActionPreflightImpact[] = [
+    ...preflight.blockers.map((message) => ({ message, tone: "danger" as const })),
+    {
+      message: "Portfolios that end and are deleted; one another account's history names stays retired",
+      count: preflight.portfolio_count,
+      tone: "danger",
+    },
+    {
+      message: "Signals deleted with their published weights",
+      count: preflight.signal_definition_count,
+      tone: "danger",
+    },
+    {
+      message: "Bars feeds deleted; the shared price tables keep their bars",
+      count: preflight.bars_feed_count,
+      tone: "danger",
+    },
+    ...(preflight.ended_portfolio_count > 0
+      ? [{
+        message: "Portfolios that already ended, whose retired Portfolios are deleted",
+        count: preflight.ended_portfolio_count,
+        tone: "default" as const,
+      }]
+      : []),
+    {
+      message: "The account's holdings, orders, trades and targets are deleted with it",
+      tone: "danger",
+    },
+    ...preflight.warnings.map((message) => ({ message, tone: "warning" as const })),
+  ];
+  return {
+    status: preflight.allowed ? "allowed" : "blocked",
+    result: {
+      allowed: preflight.allowed,
+      detail: preflight.allowed
+        ? "Deleting the account deletes everything that belongs to it, in the order Main Sequence allows."
+        : "Nothing is deleted while the account cannot be deleted.",
+      impacts,
+      items: [],
+      matchedCount: 1,
+      raw: preflight,
+    },
+  };
+}
+
+function deletionDetails(result: AccountDeleteResponse): string[] {
+  const details = [
+    `${plural(result.ended_portfolio_count, "portfolio")} ended; ${plural(result.deleted_portfolio_uids.length, "retired Portfolio")} deleted.`,
+    `${plural(result.deleted_signal_uids.length, "signal")} deleted with ${result.deleted_signal_uids.length === 1 ? "its" : "their"} weights.`,
+  ];
+  if (result.kept_portfolio_uids.length > 0) {
+    details.push(
+      `${plural(result.kept_portfolio_uids.length, "retired Portfolio")} stay${result.kept_portfolio_uids.length === 1 ? "s" : ""} because another account's history names ${result.kept_portfolio_uids.length === 1 ? "it" : "them"}, with ${plural(result.kept_signal_uids.length, "signal")} ${result.kept_portfolio_uids.length === 1 ? "it follows" : "they follow"}.`,
+    );
+  }
+  if (result.deleted_secrets?.length) {
+    details.push(`Deleted stored credential Secrets: ${result.deleted_secrets.join(", ")}.`);
+  }
+  return details;
+}
+
 function buildAccountResource(transport: ApiTransport) {
   const adapter = createHttpResourceAdapter<Account, string, ResourceCollection<Account>>({
     client: createResourceHttpClient(transport),
@@ -175,6 +268,21 @@ function buildAccountResource(transport: ApiTransport) {
             tone={account.account_is_active ? "success" : "neutral"}
           />
         ),
+      },
+      {
+        // Discovery's column: false once the keys were removed or while they await migration.
+        id: "credentials-stored",
+        header: "Keys",
+        getValue: (account) => KEYS_STATE_LABELS[keysState(account)],
+        renderCell: (account) => {
+          const state = keysState(account);
+          return (
+            <ResourceStatusCell
+              label={KEYS_STATE_LABELS[state]}
+              tone={state === "stored" ? "success" : state === "removed" ? "warning" : "neutral"}
+            />
+          );
+        },
       },
       {
         id: "snapshot-time",
@@ -272,16 +380,20 @@ function AccountList({
   formOpen,
   onRegister,
   onEdit,
+  onRemoveKeys,
   onDelete,
   onActivate,
+  onBulkActionSuccess,
 }: {
   transport: ApiTransport;
   refreshKey: number;
   formOpen: boolean;
   onRegister: () => void;
   onEdit: (account: Account) => void;
+  onRemoveKeys: (account: Account) => void;
   onDelete: (account: Account) => void;
   onActivate: (account: Account) => void;
+  onBulkActionSuccess: () => void;
 }) {
   const definition = useMemo(() => buildAccountResource(transport), [transport]);
   const primaryActions = useMemo(() => [{
@@ -293,8 +405,15 @@ function AccountList({
   }], [formOpen, onRegister]);
   const rowActions = useMemo<readonly ResourceRowAction<Account>[]>(() => [
     { id: "edit-account", label: "Edit", onSelect: onEdit },
+    {
+      id: "remove-account-keys",
+      label: "Remove keys",
+      tone: "danger",
+      disabled: (account) => account.credentials_removed === true,
+      onSelect: onRemoveKeys,
+    },
     { id: "delete-account", label: "Delete", tone: "danger", onSelect: onDelete },
-  ], [onDelete, onEdit]);
+  ], [onDelete, onEdit, onRemoveKeys]);
 
   return (
     <ResourceListPage
@@ -302,6 +421,7 @@ function AccountList({
       embedded
       pageSize={25}
       primaryActions={primaryActions}
+      onBulkActionSuccess={onBulkActionSuccess}
       onRowActivate={onActivate}
       refreshable
       refreshKey={refreshKey}
@@ -371,7 +491,7 @@ function AccountHoldingsDetail({
               {
                 key: "credential-storage",
                 label: "Keys",
-                value: account.credentials_stored ? "Stored encrypted" : "Awaiting migration",
+                value: KEYS_STATE_LABELS[keysState(account)],
               },
               {
                 key: "credentials-updated",
@@ -399,6 +519,12 @@ function AccountHoldingsDetail({
         />
       )}
     >
+      {keysState(account) === "removed" ? (
+        <p className="form-note" role="note">
+          This account&apos;s keys were removed. Its portfolios, signals and bars feeds stay, and
+          their runs fail until the owner enters keys again with Edit.
+        </p>
+      ) : null}
       <ResourceListPage
         definition={holdingsDefinition}
         embedded
@@ -671,8 +797,16 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
   const [mutation, setMutation] = useState<MutationState>({ state: "idle" });
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
+  const [removeKeysTarget, setRemoveKeysTarget] = useState<Account | null>(null);
+  const [removeKeysConfirmation, setRemoveKeysConfirmation] = useState("");
+  const [removeKeysPending, setRemoveKeysPending] = useState(false);
+  const [removeKeysError, setRemoveKeysError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deletePreflight, setDeletePreflight] = useState<ResourceBulkActionPreflightState<string>>({
+    status: "loading",
+  });
+  const [deletePreflightRevision, setDeletePreflightRevision] = useState(0);
   const [deletePending, setDeletePending] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [keyRequests, setKeyRequests] = useState<AccountKeyRequest[]>([]);
@@ -903,22 +1037,82 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
     }
   }
 
+  function requestRemoveKeys(account: Account) {
+    setRemoveKeysTarget(account);
+    setRemoveKeysConfirmation("");
+    setRemoveKeysError(null);
+  }
+
+  async function confirmRemoveKeys() {
+    if (!removeKeysTarget || removeKeysConfirmation !== "REMOVE") return;
+    setRemoveKeysPending(true);
+    setRemoveKeysError(null);
+    try {
+      const result = await api.post<AccountKeysRemovedResponse>(
+        accountRemoveKeysPath(removeKeysTarget.uid),
+        {},
+      );
+      const targetName = removeKeysTarget.account_name;
+      const deletedSecrets = result.deleted_secrets ?? [];
+      if (editing?.uid === removeKeysTarget.uid) {
+        resetForm();
+        setFormOpen(false);
+      }
+      setRemoveKeysTarget(null);
+      setRemoveKeysConfirmation("");
+      setMutation({
+        state: "success",
+        message: `Removed the keys of ${targetName}.`,
+        details: [
+          "The account, its portfolios, signals and bars feeds stay; their runs fail until keys are entered again with Edit.",
+          ...(deletedSecrets.length
+            ? [`Deleted stored credential Secrets: ${deletedSecrets.join(", ")}.`]
+            : []),
+        ],
+        warnings: result.warnings ?? [],
+      });
+      setRefreshKey((current) => current + 1);
+    } catch (error) {
+      setRemoveKeysError(formatError(error));
+    } finally {
+      setRemoveKeysPending(false);
+    }
+  }
+
   function requestDelete(account: Account) {
     setDeleteTarget(account);
     setDeleteConfirmation("");
     setDeleteError(null);
+    setDeletePreflight({ status: "loading" });
+    setDeletePreflightRevision((current) => current + 1);
   }
 
+  // What deleting the account would delete, and what refuses it; nothing changes.
+  useEffect(() => {
+    if (!deleteTarget) return undefined;
+    const controller = new AbortController();
+    setDeletePreflight({ status: "loading" });
+    api.post<AccountDeletePreflightResponse>(
+      accountDeletePreflightPath(deleteTarget.uid),
+      {},
+      controller.signal,
+    )
+      .then((preflight) => setDeletePreflight(deletePreflightState(preflight)))
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setDeletePreflight({ status: "error", error: formatError(error) });
+        }
+      });
+    return () => controller.abort();
+  }, [api, deleteTarget, deletePreflightRevision]);
+
   async function confirmDelete() {
-    if (!deleteTarget || deleteConfirmation !== "DELETE") return;
+    if (!deleteTarget || deleteConfirmation !== "DELETE" || deletePreflight.status !== "allowed") return;
     setDeletePending(true);
     setDeleteError(null);
     try {
-      const result = await api.delete<AccountDeleteResponse>(
-        `${API_ENDPOINTS.accounts}/${encodeURIComponent(deleteTarget.uid)}`,
-      );
+      const result = await api.delete<AccountDeleteResponse>(accountDeletePath(deleteTarget.uid));
       const deletedName = deleteTarget.account_name;
-      const deletedSecrets = result.deleted_secrets ?? [];
       if (editing?.uid === deleteTarget.uid) {
         resetForm();
         setFormOpen(false);
@@ -928,24 +1122,19 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
       setDeleteConfirmation("");
       setMutation({
         state: "success",
-        message: `Removed ${deletedName}.`,
-        details: deletedSecrets.length
-          ? [`Deleted stored credential Secrets: ${deletedSecrets.join(", ")}.`]
-          : [],
+        message: `Deleted ${deletedName} and everything that belonged to it.`,
+        details: deletionDetails(result),
         warnings: result.warnings ?? [],
       });
       setRefreshKey((current) => current + 1);
     } catch (error) {
       setDeleteError(formatError(error));
+      // A refusal can follow a change since the preflight ran: show the current state.
+      setDeletePreflightRevision((current) => current + 1);
     } finally {
       setDeletePending(false);
     }
   }
-
-  // Only a registration made before encrypted storage still owns Main Sequence Secrets.
-  const deletingLegacySecrets = deleteTarget !== null
-    && deleteTarget.credential_source === "managed"
-    && !deleteTarget.credentials_stored;
 
   return (
     <ApplicationPage as="main" maxWidth="full">
@@ -1025,13 +1214,20 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
                 <section className="workflow-form-section" aria-labelledby="rotate-credentials-heading">
                   <div className="workflow-form-section__header">
                     <h3 id="rotate-credentials-heading">Rotate credentials</h3>
-                    <p>
-                      Leave both fields empty to keep the current credentials. New keys must
-                      authenticate as the same Alpaca account and replace the stored values.
-                      {editing.credentials_stored
-                        ? null
-                        : " This account's keys still live in Main Sequence Secrets; rotating stores the new keys encrypted on the account and leaves Secrets this application did not create unchanged."}
-                    </p>
+                    {keysState(editing) === "removed" ? (
+                      <p>
+                        This account&apos;s keys were removed: runs on it fail until you enter new
+                        keys here. They must authenticate as the same Alpaca account.
+                      </p>
+                    ) : (
+                      <p>
+                        Leave both fields empty to keep the current credentials. New keys must
+                        authenticate as the same Alpaca account and replace the stored values.
+                        {keysState(editing) === "awaiting-migration"
+                          ? " This account's keys still live in Main Sequence Secrets; rotating stores the new keys encrypted on the account and leaves Secrets this application did not create unchanged."
+                          : null}
+                      </p>
+                    )}
                   </div>
                   <div className="form-grid">
                     <AlpacaCredentialFields
@@ -1148,25 +1344,51 @@ export function AccountsPage({ transport }: { transport: ApiTransport }) {
             formOpen={formOpen}
             onRegister={beginRegistration}
             onEdit={beginEdit}
+            onRemoveKeys={requestRemoveKeys}
             onDelete={requestDelete}
             onActivate={setSelectedAccount}
+            onBulkActionSuccess={() => setRefreshKey((current) => current + 1)}
           />
         )}
       </ApplicationPageStack>
 
       <ResourceActionConfirmationDialog
+        open={removeKeysTarget !== null}
+        actionLabel="Remove keys"
+        title="Remove account keys"
+        selectionLabel={removeKeysTarget?.account_name ?? "account"}
+        description="Clear the Alpaca keys stored for this account. Its owner, the account, its history, portfolios, signals and bars feeds stay, and nothing is disabled. Only the account's owner can remove its keys."
+        warning="Runs on this account fail until its owner enters keys again with Edit. Main Sequence Secrets the keys were imported from are kept."
+        confirmationWord="REMOVE"
+        confirmationValue={removeKeysConfirmation}
+        onConfirmationValueChange={setRemoveKeysConfirmation}
+        confirmButtonLabel="Remove keys"
+        confirmDisabled={removeKeysConfirmation !== "REMOVE" || removeKeysPending}
+        pending={removeKeysPending}
+        error={removeKeysError ?? undefined}
+        tone="danger"
+        onClose={() => {
+          if (removeKeysPending) return;
+          setRemoveKeysTarget(null);
+          setRemoveKeysConfirmation("");
+          setRemoveKeysError(null);
+        }}
+        onConfirm={confirmRemoveKeys}
+      />
+
+      <ResourceActionConfirmationDialog
         open={deleteTarget !== null}
         actionLabel="Delete"
-        title="Remove account registration"
+        title="Delete account"
         selectionLabel={deleteTarget?.account_name ?? "account"}
-        description={deletingLegacySecrets
-          ? "Remove this Alpaca registration, deactivate the account, and delete the Main Sequence Secrets this application created for its API key and secret key."
-          : "Remove this Alpaca registration, deactivate the account, and delete its stored keys. Main Sequence Secrets the account was imported from are kept."}
-        warning="The stored credentials cannot be recovered; registering the account again requires its keys. Historical holdings snapshots are retained. Configurations that reference this account can no longer run."
+        description="Delete this account and everything that belongs to it: its portfolios, their bars configurations, its bars feeds, its signals and their weights, and its whole Main Sequence history. Only the account's owner can delete it."
+        warning="This cannot be undone. Registering the account again starts it with no history. Use Remove keys instead to keep the account and only clear its keys."
+        preflight={deletePreflight}
+        onRetryPreflight={() => setDeletePreflightRevision((current) => current + 1)}
         confirmationWord="DELETE"
         confirmationValue={deleteConfirmation}
         onConfirmationValueChange={setDeleteConfirmation}
-        confirmButtonLabel="Delete"
+        confirmButtonLabel="Delete account"
         confirmDisabled={deleteConfirmation !== "DELETE" || deletePending}
         pending={deletePending}
         error={deleteError ?? undefined}

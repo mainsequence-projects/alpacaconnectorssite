@@ -22,6 +22,7 @@ let accounts = [
     unique_identifier: "PAPER__ALPACA",
     credential_source: "imported",
     credentials_stored: true,
+    credentials_removed: false,
     credentials_updated_at: null,
     credentials_updated_by_user_uid: null,
     status: "ACTIVE",
@@ -31,7 +32,39 @@ let accounts = [
     cash: "25000",
     buying_power: "50000",
   },
+  {
+    uid: "account-shared",
+    account_uid: "account-shared",
+    account_name: "Shared income account",
+    is_paper: true,
+    account_is_active: true,
+    unique_identifier: "SHARED__ALPACA",
+    credential_source: "imported",
+    credentials_stored: true,
+    credentials_removed: false,
+    credentials_updated_at: null,
+    credentials_updated_by_user_uid: null,
+    status: "ACTIVE",
+    currency: "USD",
+    snapshot_time: "2026-01-03T14:30:00Z",
+    equity: "80000",
+    cash: "5000",
+    buying_power: "10000",
+  },
 ];
+// Accounts another owner owns: the API refuses their owner's actions (connector ADR 0028) and
+// never names the owner.
+const ACCOUNTS_OF_ANOTHER_OWNER = new Set(["account-shared"]);
+const ACCOUNT_OWNED_BY_ANOTHER = {
+  detail: {
+    code: "account_owned_by_another",
+    message: "This Alpaca account is registered to another owner.",
+    retryable: false,
+  },
+};
+// What refuses an account's delete, as ms-markets' preflight or another account's current target
+// would report it. Tests set it through the mock-only `POST /__account-delete-blockers`.
+const accountDeleteBlockers = new Map();
 // Account key requests the Alpaca Agent started for the signed-in person (connector ADR 0015).
 // Tests create them through the mock-only `POST /__key-requests`.
 let keyRequests = [];
@@ -121,27 +154,15 @@ const assets = [
     composite_figi: null,
   },
 ];
-let barConfigurations = [
-  {
-    uid: "bars-existing",
-    name: "Daily paper holdings",
-    description: "Refresh the latest persisted paper-account holdings.",
+// A bars configuration has exactly one parent (connector ADR 0028): an account (a feed) or a
+// portfolio (its own, created and deleted with it, pricing its signal's assets).
+function barsConfiguration(values) {
+  return {
+    description: null,
     enabled: true,
-    account_uid: "account-paper",
-    asset_source: "account_holdings",
-    asset_uids: [],
-    frequency_id: "1d",
-    feed: "sip",
-    adjustment: "all",
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-  },
-  {
-    uid: "bars-portfolios",
-    name: "Daily portfolio prices",
-    description: "Daily SIP bars for the portfolios that use them.",
-    enabled: true,
-    account_uid: "account-paper",
+    scheduled: true,
+    account_uid: null,
+    portfolio_configuration_uid: null,
     asset_source: "portfolios",
     asset_uids: [],
     frequency_id: "1d",
@@ -149,8 +170,43 @@ let barConfigurations = [
     adjustment: "all",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
-  },
+    ...values,
+  };
+}
+let barConfigurations = [
+  barsConfiguration({
+    uid: "bars-existing",
+    name: "Daily paper holdings",
+    description: "Refresh the latest persisted paper-account holdings.",
+    account_uid: "account-paper",
+    asset_source: "account_holdings",
+  }),
+  barsConfiguration({
+    uid: "bars-portfolio-existing",
+    name: "Daily momentum portfolio prices",
+    description: "Daily SIP bars for the portfolio's assets.",
+    portfolio_configuration_uid: "portfolio-config-existing",
+  }),
+  barsConfiguration({
+    uid: "bars-portfolio-quarterly",
+    name: "Quarterly value portfolio prices",
+    portfolio_configuration_uid: "portfolio-config-quarterly",
+  }),
+  barsConfiguration({
+    uid: "bars-portfolio-shared",
+    name: "Shared income portfolio prices",
+    portfolio_configuration_uid: "portfolio-config-shared",
+  }),
+  // A feed of the former model that only a portfolio not yet adopted names; the API refuses to
+  // change it until the adopt rollout deletes it.
+  barsConfiguration({
+    uid: "bars-legacy-portfolios",
+    name: "Legacy portfolio prices",
+    description: "The prices portfolios used before accounts owned them.",
+    account_uid: "account-paper",
+  }),
 ];
+const BAR_FEED_ASSET_SOURCES = ["assets", "account_holdings"];
 // The Job alpaca-connectors declares in its API workflow (connector ADR 0013): every portfolio
 // configuration runs on it.
 function declaredJob(uid, expression) {
@@ -219,8 +275,7 @@ let portfolioRebalanceConfigurations = [
 ];
 function portfolioConfiguration(values) {
   return {
-    signal_uid: `weights-${values.uid}`,
-    bars_configuration_uid: "bars-portfolios",
+    adopted: true,
     rebalance_configuration_uid: "rebalance-nyse-close",
     rebalance_strategy: "calendar_event_signal",
     scheduled: true,
@@ -237,13 +292,18 @@ function portfolioConfiguration(values) {
   };
 }
 
-// Portfolios built from weights an application provides (connector ADR 0024). The fixture's caller
-// owns the first two; only a portfolio's owner may change, pause, or delete it.
+// Portfolios built from weights an application provides (connector ADR 0024). Each belongs to one
+// account and follows one of its signals (connector ADR 0028). The fixture's caller owns the paper
+// account's; only a portfolio's owner may change, pause, or delete it.
 let portfolioConfigurations = [
   portfolioConfiguration({
     uid: "portfolio-config-existing",
     name: "Daily momentum portfolio",
     description: "Weights given daily by an application.",
+    account_uid: "account-paper",
+    signal_definition_uid: "signal-def-momentum",
+    signal_uid: "weights-portfolio-config-existing",
+    bars_configuration_uid: "bars-portfolio-existing",
     portfolio_uid: "portfolio-existing",
     latest_run_status: "SUCCEEDED",
     latest_run_at: "2026-01-03T15:00:00Z",
@@ -253,6 +313,10 @@ let portfolioConfigurations = [
     uid: "portfolio-config-quarterly",
     name: "Quarterly value portfolio",
     description: "Weights given each quarter by an application.",
+    account_uid: "account-paper",
+    signal_definition_uid: "signal-def-value",
+    signal_uid: "signal-value",
+    bars_configuration_uid: "bars-portfolio-quarterly",
     portfolio_uid: null,
     latest_run_status: null,
     latest_run_at: null,
@@ -262,12 +326,164 @@ let portfolioConfigurations = [
     uid: "portfolio-config-shared",
     name: "Shared income portfolio",
     description: "Another owner's portfolio.",
+    account_uid: "account-shared",
+    signal_definition_uid: "signal-def-income",
+    signal_uid: "signal-income",
+    bars_configuration_uid: "bars-portfolio-shared",
     portfolio_uid: "portfolio-shared",
     latest_run_status: "SUCCEEDED",
     latest_run_at: "2026-01-03T15:00:00Z",
     updated_at: "2026-01-03T15:00:00Z",
   }),
+  // Created before accounts owned portfolios: no account or signal definition until the adopt
+  // rollout gives it one; it neither runs nor takes weights.
+  portfolioConfiguration({
+    uid: "portfolio-config-legacy",
+    name: "Legacy growth portfolio",
+    description: "Created before accounts owned portfolios.",
+    account_uid: null,
+    signal_definition_uid: null,
+    adopted: false,
+    signal_uid: "signal-legacy",
+    bars_configuration_uid: "bars-legacy-portfolios",
+    portfolio_uid: null,
+    latest_run_status: null,
+    latest_run_at: null,
+    updated_at: "2026-01-01T00:00:00Z",
+  }),
 ];
+const PORTFOLIO_NOT_ADOPTED = {
+  detail: {
+    code: "portfolio_not_adopted",
+    message: "This portfolio was created before accounts owned portfolios and has no account yet; it does not run or take weights until the portfolio adopt rollout gives it one or ends it.",
+    retryable: false,
+  },
+};
+
+// The one kind of signal the connector makes (connector ADR 0028): it belongs to one account, its
+// key is the application's, and only that account's portfolios follow it.
+function signalDefinitionFixture(values) {
+  return {
+    description: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...values,
+  };
+}
+let signalDefinitions = [
+  signalDefinitionFixture({
+    uid: "signal-def-momentum",
+    account_uid: "account-paper",
+    key: "momentum",
+    name: "Momentum",
+    description: "Daily momentum weights.",
+    signal_uid: "weights-portfolio-config-existing",
+  }),
+  signalDefinitionFixture({
+    uid: "signal-def-value",
+    account_uid: "account-paper",
+    key: "value/quarterly",
+    name: "Quarterly value",
+    signal_uid: "signal-value",
+  }),
+  signalDefinitionFixture({
+    uid: "signal-def-unused",
+    account_uid: "account-paper",
+    key: "unused",
+    name: "Unused signal",
+    signal_uid: "signal-unused",
+  }),
+  signalDefinitionFixture({
+    uid: "signal-def-income",
+    account_uid: "account-shared",
+    key: "income",
+    name: "Income",
+    signal_uid: "signal-income",
+  }),
+];
+// Published weights per signal, oldest observation first.
+const SIGNAL_WEIGHTS = {
+  "weights-portfolio-config-existing": {
+    time_indexes: ["2026-01-02T14:30:00Z", "2026-01-03T14:30:00Z"],
+    assets: [
+      { asset_identifier: "ALPACA::11111111-1111-4111-8111-111111111111", symbol: "AAPL", name: "Apple Inc.", weights: [0.6, 0.55] },
+      { asset_identifier: "ALPACA::22222222-2222-4222-8222-222222222222", symbol: "MSFT", name: "Microsoft Corporation", weights: [0.4, 0.45] },
+    ],
+  },
+  "signal-value": {
+    time_indexes: ["2026-01-02T14:30:00Z"],
+    assets: [
+      { asset_identifier: "ALPACA::33333333-3333-4333-8333-333333333333", symbol: "NVDA", name: "NVIDIA Corporation", weights: [1] },
+    ],
+  },
+};
+
+function signalDefinitionResponse(definition) {
+  return {
+    ...definition,
+    portfolio_count: portfolioConfigurations.filter(
+      (configuration) => configuration.signal_definition_uid === definition.uid,
+    ).length,
+  };
+}
+
+function signalObservations(definition, limit) {
+  const published = SIGNAL_WEIGHTS[definition.signal_uid] ?? { time_indexes: [], assets: [] };
+  const start = Math.max(published.time_indexes.length - limit, 0);
+  const timeIndexes = published.time_indexes.slice(start);
+  const assets = published.assets.map((asset) => ({ ...asset, weights: asset.weights.slice(start) }));
+  return {
+    configuration_uid: null,
+    signal_definition_uid: definition.uid,
+    signal_uid: definition.signal_uid,
+    observation_count: timeIndexes.length,
+    asset_count: assets.length,
+    time_indexes: timeIndexes,
+    assets,
+  };
+}
+
+function collection(items, url) {
+  const limit = Number(url.searchParams.get("limit") ?? 25);
+  const offset = Number(url.searchParams.get("offset") ?? 0);
+  return {
+    items: items.slice(offset, offset + limit),
+    pageInfo: {
+      pageIndex: Math.floor(offset / limit),
+      pageSize: limit,
+      totalItems: items.length,
+      hasNextPage: offset + limit < items.length,
+      hasPreviousPage: offset > 0,
+    },
+  };
+}
+
+// What deleting the account deletes, and what refuses it (connector ADR 0028, decision 8).
+function accountDeletePreflight(accountUid) {
+  const blockers = accountDeleteBlockers.get(accountUid) ?? [];
+  return {
+    account_uid: accountUid,
+    allowed: blockers.length === 0,
+    blockers,
+    warnings: [],
+    portfolio_count: portfolioConfigurations.filter((item) => item.account_uid === accountUid).length,
+    signal_definition_count: signalDefinitions.filter((item) => item.account_uid === accountUid).length,
+    bars_feed_count: barConfigurations.filter((item) => item.account_uid === accountUid).length,
+    ended_portfolio_count: 0,
+  };
+}
+
+function removeAccountKeys(accountUid) {
+  const index = accounts.findIndex((account) => account.uid === accountUid);
+  accounts[index] = {
+    ...accounts[index],
+    credentials_stored: false,
+    credentials_removed: true,
+    credentials_updated_at: new Date().toISOString(),
+    credentials_updated_by_user_uid: "user-e2e",
+  };
+  return { account_uid: accountUid, keys_removed: true, deleted_secrets: [], warnings: [] };
+}
 // Mirrors the API's refusal of a change by anyone but the portfolio's owner; it never names the owner.
 const PORTFOLIOS_OF_ANOTHER_OWNER = new Set(["portfolio-config-shared"]);
 const PORTFOLIO_OWNED_BY_ANOTHER = {
@@ -366,20 +582,25 @@ function linkedRebalance(rebalanceConfigurationUid) {
   return linked;
 }
 
-// The detail's linked_bars projection, named as the API names each asset source.
-function linkedBars(barsConfigurationUid) {
-  const bars = barConfigurations.find((candidate) => candidate.uid === barsConfigurationUid);
+// The detail's linked_bars projection, named as the API names each asset source: the portfolio's
+// own configuration, run with its account's keys, or the feed a portfolio not yet adopted names.
+function linkedBars(configuration) {
+  const bars = configuration.adopted
+    ? barConfigurations.find((candidate) => candidate.portfolio_configuration_uid === configuration.uid)
+    : barConfigurations.find((candidate) => candidate.uid === configuration.bars_configuration_uid);
   if (!bars) return null;
-  const account = accounts.find((candidate) => candidate.uid === bars.account_uid);
+  const accountUid = configuration.adopted ? configuration.account_uid : bars.account_uid;
+  const account = accounts.find((candidate) => candidate.uid === accountUid);
   const assetSourceNames = {
     assets: `${bars.asset_uids.length} explicitly selected registered assets`,
     account_holdings: `Latest holdings for ${account?.account_name ?? "the account"} within the trailing 30 days`,
-    portfolios: "Every asset of the live portfolios that use these prices",
+    portfolios: "Every asset the portfolio's signal has published",
   };
   return {
     name: bars.name,
     description: bars.description,
     enabled: bars.enabled,
+    scheduled: bars.scheduled,
     account_name: account?.account_name ?? "Unknown account",
     account_environment: account?.is_paper === false ? "live" : "paper",
     asset_source: bars.asset_source,
@@ -430,7 +651,7 @@ function portfolioConfigurationDetail(configuration) {
       last_observation_at: "2026-01-03T14:30:00Z",
       asset_count: 3,
     },
-    linked_bars: linkedBars(configuration.bars_configuration_uid),
+    linked_bars: linkedBars(configuration),
     linked_rebalance: linkedRebalance(configuration.rebalance_configuration_uid),
     canonical_portfolio: {
       materialized,
@@ -691,6 +912,11 @@ createServer(async (request, response) => {
     siteAgentUid = typeof body.agent_uid === "string" ? body.agent_uid : null;
     return sendJson(response, 200, { agent_uid: siteAgentUid });
   }
+  if (url.pathname === "/__account-delete-blockers" && request.method === "POST") {
+    const body = await readJson(request);
+    accountDeleteBlockers.set(body.account_uid, Array.isArray(body.blockers) ? body.blockers : []);
+    return sendJson(response, 200, { account_uid: body.account_uid, blockers: accountDeleteBlockers.get(body.account_uid) });
+  }
   if (url.pathname === "/__key-requests" && request.method === "POST") {
     const body = await readJson(request);
     const now = new Date();
@@ -905,11 +1131,42 @@ createServer(async (request, response) => {
           { id: "unique-identifier", header: "Identifier", value_path: "unique_identifier", data_type: "text", default_visible: true, hideable: true, sortable_key: "unique_identifier" },
           { id: "is-paper", header: "Paper", value_path: "is_paper", data_type: "boolean", default_visible: true, hideable: true, filter_key: "is_paper" },
           { id: "account-is-active", header: "Active", value_path: "account_is_active", data_type: "boolean", default_visible: true, hideable: true, filter_key: "account_is_active" },
+          { id: "credentials-stored", header: "Keys", value_path: "credentials_stored", data_type: "boolean", default_visible: true, hideable: true },
           { id: "snapshot-time", header: "Last Refresh", value_path: "snapshot_time", data_type: "datetime", default_visible: true, hideable: true },
         ],
       },
-      bulk_actions: [],
+      bulk_actions: [
+        {
+          id: "remove-keys",
+          label: "Remove keys",
+          endpoint: "/v1/accounts/actions/remove-keys",
+          method: "POST",
+          tone: "danger",
+          selection_modes: ["explicit"],
+          options: [],
+          preflight_endpoint: "/v1/accounts/actions/remove-keys/preflight",
+        },
+      ],
     });
+  }
+  if (request.method === "POST" && ["/v1/accounts/actions/remove-keys/preflight", "/v1/accounts/actions/remove-keys"].includes(url.pathname)) {
+    const body = await readJson(request);
+    const uids = body.selection?.uids ?? [];
+    if (uids.some((uid) => ACCOUNTS_OF_ANOTHER_OWNER.has(uid))) return sendJson(response, 409, ACCOUNT_OWNED_BY_ANOTHER);
+    const missing = uids.filter((uid) => !accounts.some((account) => account.uid === uid));
+    const preflight = {
+      contract: "command-center.bulk_action_preflight@v1",
+      allowed: missing.length === 0,
+      detail: missing.length === 0
+        ? "The stored keys will be removed. The owners, the accounts, their history, portfolios and configurations stay; runs fail until keys are registered again."
+        : "One or more selected accounts do not exist.",
+      matched_count: uids.length - missing.length,
+      blockers: missing.map((uid) => `Missing account: ${uid}`),
+      warnings: [],
+    };
+    if (url.pathname.endsWith("/preflight")) return sendJson(response, 200, preflight);
+    if (!preflight.allowed) return sendJson(response, 409, { detail: preflight });
+    return sendJson(response, 200, { results: uids.map(removeAccountKeys) });
   }
   if (request.method === "GET" && url.pathname === "/v1/accounts") {
     const search = (url.searchParams.get("search") ?? "").toLowerCase();
@@ -998,6 +1255,7 @@ createServer(async (request, response) => {
       account_is_active: true,
       credential_source: "managed",
       credentials_stored: true,
+      credentials_removed: false,
       credentials_updated_at: now,
       credentials_updated_by_user_uid: "user-e2e",
       status: "ACTIVE",
@@ -1059,6 +1317,16 @@ createServer(async (request, response) => {
       },
     });
   }
+  const accountActionMatch = url.pathname.match(/^\/v1\/accounts\/([^/]+)\/actions\/(remove-keys|delete\/preflight)$/);
+  if (request.method === "POST" && accountActionMatch) {
+    const uid = decodeURIComponent(accountActionMatch[1]);
+    if (!accounts.some((account) => account.uid === uid)) {
+      return sendJson(response, 404, { detail: "Account registration not found." });
+    }
+    if (ACCOUNTS_OF_ANOTHER_OWNER.has(uid)) return sendJson(response, 409, ACCOUNT_OWNED_BY_ANOTHER);
+    if (accountActionMatch[2] === "remove-keys") return sendJson(response, 200, removeAccountKeys(uid));
+    return sendJson(response, 200, accountDeletePreflight(uid));
+  }
   const accountMatch = url.pathname.match(/^\/v1\/accounts\/([^/]+)$/);
   if (accountMatch) {
     const uid = decodeURIComponent(accountMatch[1]);
@@ -1099,6 +1367,7 @@ createServer(async (request, response) => {
           ...accounts[index],
           credential_source: "managed",
           credentials_stored: true,
+          credentials_removed: false,
           credentials_updated_at: new Date().toISOString(),
           credentials_updated_by_user_uid: "user-e2e",
         };
@@ -1107,15 +1376,45 @@ createServer(async (request, response) => {
       return sendJson(response, 200, accounts[index]);
     }
     if (request.method === "DELETE") {
-      const [deleted] = accounts.splice(index, 1);
+      // The API takes only the exact confirmation and changes nothing without it.
+      if (url.searchParams.get("confirm") !== `DELETE ${uid}`) {
+        return sendJson(response, 400, {
+          detail: { code: "invalid_request", message: "Confirm with exactly `DELETE <account uid>`.", retryable: false },
+        });
+      }
+      if (ACCOUNTS_OF_ANOTHER_OWNER.has(uid)) return sendJson(response, 409, ACCOUNT_OWNED_BY_ANOTHER);
+      const preflight = accountDeletePreflight(uid);
+      if (!preflight.allowed) {
+        return sendJson(response, 409, {
+          detail: {
+            code: "account_delete_refused",
+            message: `The account cannot be deleted: ${preflight.blockers.join("; ")}`,
+            retryable: false,
+          },
+        });
+      }
+      // Everything that belongs to the account goes with it.
+      const ended = portfolioConfigurations.filter((item) => item.account_uid === uid);
+      const endedUids = new Set(ended.map((item) => item.uid));
+      const definitions = signalDefinitions.filter((item) => item.account_uid === uid);
+      portfolioConfigurations = portfolioConfigurations.filter((item) => !endedUids.has(item.uid));
+      barConfigurations = barConfigurations.filter((item) => (
+        item.account_uid !== uid && !endedUids.has(item.portfolio_configuration_uid)
+      ));
+      signalDefinitions = signalDefinitions.filter((item) => item.account_uid !== uid);
+      accounts.splice(index, 1);
       return sendJson(response, 200, {
-        account_uid: deleted.uid,
-        registration_removed: true,
-        account_deactivated: true,
-        retained_holdings_sets: 0,
+        account_uid: uid,
+        deleted: true,
+        ended_portfolio_count: ended.length,
+        deleted_portfolio_uids: ended.flatMap((item) => (item.portfolio_uid ? [item.portfolio_uid] : [])),
+        kept_portfolio_uids: [],
+        deleted_signal_uids: definitions.map((item) => item.signal_uid),
+        kept_signal_uids: [],
         // Keys are stored encrypted on the row (connector ADR 0017); nothing lives in Secrets.
         deleted_secrets: [],
         warnings: [],
+        markets: null,
       });
     }
   }
@@ -1136,6 +1435,8 @@ createServer(async (request, response) => {
           },
           filters: [
             { key: "enabled", label: "Enabled", type: "boolean" },
+            { key: "scheduled", label: "Scheduled", type: "boolean" },
+            { key: "portfolio_owned", label: "Portfolio Owned", type: "boolean" },
             {
               key: "asset_source",
               label: "Asset Source",
@@ -1143,7 +1444,7 @@ createServer(async (request, response) => {
               options: [
                 { value: "account_holdings", label: "Latest account holdings" },
                 { value: "assets", label: "Explicit assets" },
-                { value: "portfolios", label: "Portfolio assets" },
+                { value: "portfolios", label: "Assets of its portfolios" },
               ],
             },
           ],
@@ -1151,11 +1452,14 @@ createServer(async (request, response) => {
         },
         columns: [
           { id: "name", header: "Configuration", default_visible: true, hideable: false, sortable_key: "name" },
+          { id: "account-uid", header: "Account", value_path: "account_uid", data_type: "text", default_visible: true, hideable: true },
+          { id: "portfolio-configuration-uid", header: "Portfolio", value_path: "portfolio_configuration_uid", data_type: "text", default_visible: true, hideable: true },
           { id: "asset-source", header: "Asset Source", value_path: "asset_source", data_type: "text", default_visible: true, hideable: true, filter_key: "asset_source" },
           { id: "frequency-id", header: "Frequency", value_path: "frequency_id", data_type: "text", default_visible: true, hideable: true, sortable_key: "frequency_id" },
           { id: "feed", header: "Feed", default_visible: true, hideable: true },
           { id: "adjustment", header: "Adjustment", default_visible: true, hideable: true },
           { id: "enabled", header: "Enabled", value_path: "enabled", data_type: "boolean", default_visible: true, hideable: true, filter_key: "enabled" },
+          { id: "scheduled", header: "Daily Update", value_path: "scheduled", data_type: "boolean", default_visible: true, hideable: true, filter_key: "scheduled" },
           { id: "updated-at", header: "Updated", value_path: "updated_at", data_type: "datetime", default_visible: true, hideable: true, sortable_key: "updated_at" },
         ],
       },
@@ -1164,10 +1468,13 @@ createServer(async (request, response) => {
   }
   if (request.method === "GET" && url.pathname === "/v1/market-data/bar-configurations") {
     const search = (url.searchParams.get("search") ?? "").toLowerCase();
+    const portfolioOwned = url.searchParams.get("portfolio_owned");
     const matched = barConfigurations.filter((configuration) => (
-      !search
-      || configuration.name.toLowerCase().includes(search)
-      || configuration.description?.toLowerCase().includes(search)
+      (!search
+        || configuration.name.toLowerCase().includes(search)
+        || configuration.description?.toLowerCase().includes(search))
+      && (portfolioOwned === null
+        || (configuration.portfolio_configuration_uid !== null) === (portfolioOwned === "true"))
     ));
     return sendJson(response, 200, {
       items: matched,
@@ -1182,9 +1489,21 @@ createServer(async (request, response) => {
   }
   if (request.method === "POST" && url.pathname === "/v1/market-data/bar-configurations") {
     const body = await readJson(request);
+    // A feed only: a portfolio's own configuration is created with its portfolio.
+    if (!BAR_FEED_ASSET_SOURCES.includes(body.asset_source)) {
+      return sendJson(response, 422, {
+        detail: [{ loc: ["body", "asset_source"], msg: "Input should be 'assets' or 'account_holdings'", type: "literal_error" }],
+      });
+    }
+    if (!body.account_uid) {
+      return sendJson(response, 422, { detail: [{ loc: ["body", "account_uid"], msg: "Field required", type: "missing" }] });
+    }
+    if (ACCOUNTS_OF_ANOTHER_OWNER.has(body.account_uid)) return sendJson(response, 409, ACCOUNT_OWNED_BY_ANOTHER);
     const now = new Date().toISOString();
     const created = {
+      scheduled: true,
       ...body,
+      portfolio_configuration_uid: null,
       uid: `bars-${barConfigurations.length + 1}`,
       created_at: now,
       updated_at: now,
@@ -1198,16 +1517,48 @@ createServer(async (request, response) => {
     const index = barConfigurations.findIndex((configuration) => configuration.uid === uid);
     if (index < 0) return sendJson(response, 404, { detail: "Bar configuration not found." });
     if (request.method === "GET") return sendJson(response, 200, barConfigurations[index]);
+    const current = barConfigurations[index];
+    const portfolioOwned = current.portfolio_configuration_uid !== null;
+    if (["PATCH", "DELETE"].includes(request.method)) {
+      if (portfolioOwned && PORTFOLIOS_OF_ANOTHER_OWNER.has(current.portfolio_configuration_uid)) {
+        return sendJson(response, 403, PORTFOLIO_OWNED_BY_ANOTHER);
+      }
+      if (!portfolioOwned && ACCOUNTS_OF_ANOTHER_OWNER.has(current.account_uid)) {
+        return sendJson(response, 409, ACCOUNT_OWNED_BY_ANOTHER);
+      }
+    }
     if (request.method === "PATCH") {
       const body = await readJson(request);
+      if (portfolioOwned && "account_uid" in body) {
+        return sendJson(response, 409, {
+          detail: { code: "action_conflict", message: "A portfolio's own bars configuration uses its portfolio's account.", retryable: false },
+        });
+      }
+      const source = body.asset_source ?? current.asset_source;
+      if (portfolioOwned ? source !== "portfolios" : !BAR_FEED_ASSET_SOURCES.includes(source)) {
+        return sendJson(response, 409, {
+          detail: {
+            code: "action_conflict",
+            message: portfolioOwned
+              ? "A portfolio's own bars configuration prices its portfolio's assets."
+              : "A bars feed prices explicit assets or its account's holdings; a portfolio's own bars configuration is created with the portfolio.",
+            retryable: false,
+          },
+        });
+      }
       barConfigurations[index] = {
-        ...barConfigurations[index],
+        ...current,
         ...body,
         updated_at: new Date().toISOString(),
       };
       return sendJson(response, 200, barConfigurations[index]);
     }
     if (request.method === "DELETE") {
+      if (portfolioOwned) {
+        return sendJson(response, 409, {
+          detail: { code: "action_conflict", message: "This bars configuration belongs to a portfolio; it is deleted with the portfolio.", retryable: false },
+        });
+      }
       const [deleted] = barConfigurations.splice(index, 1);
       return sendJson(response, 200, { uid: deleted.uid, deleted: true });
     }
@@ -1224,11 +1575,16 @@ createServer(async (request, response) => {
       list: {
         controls: {
           search: { placeholder: "Search portfolios", fields: ["name", "description"] },
-          filters: [],
+          filters: [
+            { key: "account_uid", label: "Account Uid", type: "text" },
+            { key: "signal_definition_uid", label: "Signal Definition Uid", type: "text" },
+          ],
           ordering: ["name", "updated_at"],
         },
         columns: [
           { id: "name", header: "Portfolio", value_path: "name", data_type: "text", default_visible: true, hideable: false, sortable_key: "name" },
+          { id: "account-uid", header: "Account", value_path: "account_uid", data_type: "text", default_visible: true, hideable: true, filter_key: "account_uid" },
+          { id: "signal-definition-uid", header: "Signal", value_path: "signal_definition_uid", data_type: "text", default_visible: true, hideable: true, filter_key: "signal_definition_uid" },
           { id: "rebalance-strategy", header: "Rebalance", value_path: "rebalance_strategy", data_type: "text", default_visible: true, hideable: true },
           { id: "job-image-status", header: "Image", value_path: "job.image_status", data_type: "text", default_visible: true, hideable: true },
           { id: "latest-run-status", header: "Last Run", value_path: "latest_run_status", data_type: "text", default_visible: true, hideable: true },
@@ -1241,10 +1597,14 @@ createServer(async (request, response) => {
   }
   if (request.method === "GET" && url.pathname === "/v1/portfolio-configurations") {
     const search = (url.searchParams.get("search") ?? "").toLowerCase();
+    const accountUid = url.searchParams.get("account_uid");
+    const signalDefinitionUid = url.searchParams.get("signal_definition_uid");
     const matched = portfolioConfigurations.filter((configuration) => (
-      !search
-      || configuration.name.toLowerCase().includes(search)
-      || configuration.description?.toLowerCase().includes(search)
+      (!search
+        || configuration.name.toLowerCase().includes(search)
+        || configuration.description?.toLowerCase().includes(search))
+      && (accountUid === null || configuration.account_uid === accountUid)
+      && (signalDefinitionUid === null || configuration.signal_definition_uid === signalDefinitionUid)
     ));
     return sendJson(response, 200, {
       items: matched,
@@ -1257,11 +1617,60 @@ createServer(async (request, response) => {
       },
     });
   }
+  if (request.method === "POST" && url.pathname === "/v1/portfolio-configurations") {
+    const body = await readJson(request);
+    if (!accounts.some((account) => account.uid === body.account_uid)) {
+      return sendJson(response, 404, { detail: "Account registration not found." });
+    }
+    if (ACCOUNTS_OF_ANOTHER_OWNER.has(body.account_uid)) return sendJson(response, 409, ACCOUNT_OWNED_BY_ANOTHER);
+    const definition = signalDefinitions.find((item) => item.uid === body.signal_definition_uid);
+    if (!definition || definition.account_uid !== body.account_uid) {
+      return sendJson(response, 409, {
+        detail: { code: "signal_of_another_account", message: "The portfolio must follow a signal definition of its own account.", retryable: false },
+      });
+    }
+    const now = new Date().toISOString();
+    const uid = `portfolio-config-${portfolioConfigurations.length + 1}`;
+    const bars = barsConfiguration({
+      uid: `bars-portfolio-${uid}`,
+      name: body.bars?.name ?? `${body.name} prices`,
+      portfolio_configuration_uid: uid,
+      frequency_id: body.bars?.frequency_id ?? "1d",
+      feed: body.bars?.feed ?? "sip",
+      adjustment: body.bars?.adjustment ?? "all",
+      created_at: now,
+      updated_at: now,
+    });
+    const created = portfolioConfiguration({
+      uid,
+      name: body.name,
+      description: body.description ?? null,
+      account_uid: body.account_uid,
+      signal_definition_uid: definition.uid,
+      signal_uid: definition.signal_uid,
+      bars_configuration_uid: bars.uid,
+      rebalance_configuration_uid: body.rebalance_configuration_uid,
+      portfolio_uid: `portfolio-${uid}`,
+      latest_run_status: null,
+      latest_run_at: null,
+      created_at: now,
+      updated_at: now,
+    });
+    barConfigurations.push(bars);
+    portfolioConfigurations.push(created);
+    return sendJson(response, 201, {
+      configuration: created,
+      portfolio_uid: created.portfolio_uid,
+      portfolio_unique_identifier: `ALPACA_PORTFOLIO__${uid}`,
+      bars_configuration_uid: bars.uid,
+    });
+  }
   const portfolioActionMatch = url.pathname.match(/^\/v1\/portfolio-configurations\/([^/]+)\/actions\/run$/);
   if (request.method === "POST" && portfolioActionMatch) {
     const uid = decodeURIComponent(portfolioActionMatch[1]);
     const index = portfolioConfigurations.findIndex((configuration) => configuration.uid === uid);
     if (index < 0) return sendJson(response, 404, { detail: "Portfolio configuration not found." });
+    if (!portfolioConfigurations[index].adopted) return sendJson(response, 409, PORTFOLIO_NOT_ADOPTED);
     const now = new Date().toISOString();
     portfolioConfigurations[index] = {
       ...portfolioConfigurations[index],
@@ -1304,8 +1713,10 @@ createServer(async (request, response) => {
       return sendJson(response, 200, portfolioConfigurations[index]);
     }
     if (request.method === "DELETE") {
-      // Deleting retires the portfolio; its published values stay as its record.
+      // Deleting retires the portfolio; its published values stay as its record, and its own bars
+      // configuration goes with it.
       const [deleted] = portfolioConfigurations.splice(index, 1);
+      barConfigurations = barConfigurations.filter((item) => item.portfolio_configuration_uid !== deleted.uid);
       return sendJson(response, 200, {
         configuration_uid: deleted.uid,
         deleted: true,
@@ -1315,6 +1726,113 @@ createServer(async (request, response) => {
           state: deleted.portfolio_uid ? "retired" : "absent",
           retired_at: deleted.portfolio_uid ? new Date().toISOString() : null,
         },
+      });
+    }
+  }
+  if (request.method === "GET" && url.pathname === "/v1/signal-definitions/discovery") {
+    return sendJson(response, 200, {
+      contract: "command-center.resource_discovery@v1",
+      resource: {
+        id: "alpaca-signal-definitions",
+        label: "Signals",
+        item_label: "signal definition",
+        identity: { fields: ["uid"] },
+      },
+      list: {
+        controls: {
+          search: { placeholder: "Search signals", fields: ["name", "key"] },
+          filters: [{ key: "account_uid", label: "Account Uid", type: "text" }],
+          ordering: ["name"],
+        },
+        columns: [
+          { id: "name", header: "Signal", value_path: "name", data_type: "text", default_visible: true, hideable: false, sortable_key: "name" },
+          { id: "key", header: "Key", value_path: "key", data_type: "text", default_visible: true, hideable: true },
+          { id: "account-uid", header: "Account", value_path: "account_uid", data_type: "text", default_visible: true, hideable: true, filter_key: "account_uid" },
+          { id: "portfolio-count", header: "Portfolios", value_path: "portfolio_count", data_type: "number", default_visible: true, hideable: true },
+          { id: "updated-at", header: "Updated", value_path: "updated_at", data_type: "datetime", default_visible: true, hideable: true },
+        ],
+      },
+      bulk_actions: [],
+    });
+  }
+  if (request.method === "GET" && url.pathname === "/v1/signal-definitions") {
+    const search = (url.searchParams.get("search") ?? "").toLowerCase();
+    const accountUid = url.searchParams.get("account_uid");
+    const matched = signalDefinitions
+      .filter((definition) => (
+        (!search || definition.name.toLowerCase().includes(search) || definition.key.toLowerCase().includes(search))
+        && (accountUid === null || definition.account_uid === accountUid)
+      ))
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(signalDefinitionResponse);
+    return sendJson(response, 200, collection(matched, url));
+  }
+  if (request.method === "POST" && url.pathname === "/v1/signal-definitions") {
+    const body = await readJson(request);
+    if (!accounts.some((account) => account.uid === body.account_uid)) {
+      return sendJson(response, 404, { detail: "Account registration not found." });
+    }
+    if (ACCOUNTS_OF_ANOTHER_OWNER.has(body.account_uid)) return sendJson(response, 409, ACCOUNT_OWNED_BY_ANOTHER);
+    if (signalDefinitions.some((item) => item.account_uid === body.account_uid && item.key === body.key)) {
+      return sendJson(response, 409, {
+        detail: { code: "signal_key_exists", message: "This account already has a signal with this key.", retryable: false },
+      });
+    }
+    const now = new Date().toISOString();
+    const created = signalDefinitionFixture({
+      uid: `signal-def-${signalDefinitions.length + 1}`,
+      account_uid: body.account_uid,
+      key: body.key,
+      name: body.name,
+      description: body.description ?? null,
+      signal_uid: `signal-${body.account_uid}-${body.key}`,
+      created_at: now,
+      updated_at: now,
+    });
+    signalDefinitions.push(created);
+    return sendJson(response, 201, signalDefinitionResponse(created));
+  }
+  const signalWeightsMatch = url.pathname.match(/^\/v1\/signal-definitions\/([^/]+)\/weights$/);
+  if (request.method === "GET" && signalWeightsMatch) {
+    const definition = signalDefinitions.find((item) => item.uid === decodeURIComponent(signalWeightsMatch[1]));
+    if (!definition) return sendJson(response, 404, { detail: "Signal definition not found." });
+    return sendJson(response, 200, signalObservations(definition, Number(url.searchParams.get("limit") ?? 20)));
+  }
+  const signalDefinitionMatch = url.pathname.match(/^\/v1\/signal-definitions\/([^/]+)$/);
+  if (signalDefinitionMatch) {
+    const uid = decodeURIComponent(signalDefinitionMatch[1]);
+    const index = signalDefinitions.findIndex((item) => item.uid === uid);
+    if (index < 0) return sendJson(response, 404, { detail: "Signal definition not found." });
+    if (request.method === "GET") return sendJson(response, 200, signalDefinitionResponse(signalDefinitions[index]));
+    if (["PATCH", "DELETE"].includes(request.method) && ACCOUNTS_OF_ANOTHER_OWNER.has(signalDefinitions[index].account_uid)) {
+      return sendJson(response, 409, ACCOUNT_OWNED_BY_ANOTHER);
+    }
+    if (request.method === "PATCH") {
+      const body = await readJson(request);
+      const errors = requestModelErrors(body, {
+        checks: {
+          name: [isText, "String should have at least 1 character"],
+          description: [(value) => value === null || typeof value === "string", "Input should be a valid string"],
+        },
+        required: [],
+        partial: true,
+        label: "signal definition",
+      });
+      if (errors.length) return sendJson(response, 422, { detail: errors });
+      signalDefinitions[index] = { ...signalDefinitions[index], ...body, updated_at: new Date().toISOString() };
+      return sendJson(response, 200, signalDefinitionResponse(signalDefinitions[index]));
+    }
+    if (request.method === "DELETE") {
+      if (signalDefinitionResponse(signalDefinitions[index]).portfolio_count > 0) {
+        return sendJson(response, 409, {
+          detail: { code: "signal_followed", message: "Portfolios follow this signal; delete them first.", retryable: false },
+        });
+      }
+      const [deleted] = signalDefinitions.splice(index, 1);
+      return sendJson(response, 200, {
+        uid: deleted.uid,
+        deleted: true,
+        signal: { uid: deleted.signal_uid, state: "deleted" },
       });
     }
   }

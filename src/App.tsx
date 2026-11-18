@@ -13,7 +13,7 @@ import {
   ResourcePicker,
   type ResourcePickerOption,
 } from "@dev-mainsequence/command-center-sdk/views";
-import { BookOpen, BriefcaseBusiness, ChartCandlestick, Landmark, PackageSearch, Repeat2 } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, ChartCandlestick, Landmark, PackageSearch, Repeat2, Signal } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -38,8 +38,9 @@ import { AssetResourceList } from "./assetResource";
 import { BarsConfigurationsPage } from "./barConfigurations";
 import { PortfoliosPage } from "./portfolios";
 import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
+import { SignalsPage } from "./signals";
 
-type RouteId = "assets" | "accounts" | "bars" | "rebalances" | "portfolios";
+type RouteId = "assets" | "accounts" | "bars" | "signals" | "rebalances" | "portfolios";
 const ASSET_OPERATION_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 type ActionState<T> =
   | { state: "idle" }
@@ -51,6 +52,7 @@ const ROUTE_PATHS: Record<RouteId, string> = {
   assets: "/assets",
   accounts: "/accounts",
   bars: "/bars",
+  signals: "/signals",
   rebalances: "/rebalance-configurations",
   portfolios: "/portfolios",
 };
@@ -77,14 +79,14 @@ const NAVIGATION: NavigationApplicationDefinition = {
           label: "Accounts",
           href: "/accounts",
           icon: Landmark,
-          description: "Register accounts with their Alpaca API keys",
+          description: "Register accounts, remove their keys, or delete them with all they own",
         },
         {
           id: "bars",
           label: "Bars",
           href: "/bars",
           icon: ChartCandlestick,
-          description: "Manage reusable market-data configurations",
+          description: "Manage accounts' bars feeds and portfolios' own bars",
         },
       ],
     },
@@ -92,6 +94,13 @@ const NAVIGATION: NavigationApplicationDefinition = {
       id: "portfolios",
       label: "Portfolios",
       destinations: [
+        {
+          id: "signals",
+          label: "Signals",
+          href: "/signals",
+          icon: Signal,
+          description: "Inspect each account's signals and the weights its applications publish",
+        },
         {
           id: "rebalances",
           label: "Rebalance Configurations",
@@ -104,7 +113,7 @@ const NAVIGATION: NavigationApplicationDefinition = {
           label: "Portfolios",
           href: "/portfolios",
           icon: BriefcaseBusiness,
-          description: "Inspect and run portfolios built from provided weights",
+          description: "Inspect and run each account's portfolios",
         },
       ],
     },
@@ -127,6 +136,7 @@ const NAVIGATION: NavigationApplicationDefinition = {
 function routeFromPath(pathname: string): RouteId {
   if (pathname.startsWith("/accounts")) return "accounts";
   if (pathname.startsWith("/bars")) return "bars";
+  if (pathname.startsWith("/signals")) return "signals";
   if (pathname.startsWith("/rebalance-configurations")) return "rebalances";
   if (pathname.startsWith("/portfolios")) return "portfolios";
   return "assets";
@@ -639,6 +649,8 @@ export default function App() {
             transport={transportState.transport}
             configuration={configuration}
           />
+        ) : route === "signals" ? (
+          <SignalsPage transport={transportState.transport} />
         ) : route === "rebalances" ? (
           <PortfoliosPage key="rebalances" transport={transportState.transport} section="rebalances" />
         ) : (

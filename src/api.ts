@@ -13,7 +13,40 @@ export const API_ENDPOINTS = {
   portfolioConfigurationDiscovery: "/v1/portfolio-configurations/discovery",
   portfolioRebalanceConfigurations: "/v1/portfolio-rebalance-configurations",
   portfolioRebalanceConfigurationDiscovery: "/v1/portfolio-rebalance-configurations/discovery",
+  signalDefinitions: "/v1/signal-definitions",
+  signalDefinitionDiscovery: "/v1/signal-definitions/discovery",
 } as const;
+
+function accountPath(accountUid: string): string {
+  return `${API_ENDPOINTS.accounts}/${encodeURIComponent(accountUid)}`;
+}
+
+/** Clears the account's stored keys; everything else stays (connector ADR 0028). */
+export function accountRemoveKeysPath(accountUid: string): string {
+  return `${accountPath(accountUid)}/actions/remove-keys`;
+}
+
+/** What deleting the account would delete, and what refuses it; nothing changes. */
+export function accountDeletePreflightPath(accountUid: string): string {
+  return `${accountPath(accountUid)}/actions/delete/preflight`;
+}
+
+/**
+ * Deletes the account and everything that belongs to it. The API takes only the exact
+ * confirmation `DELETE <account uid>`; the site sends it once the person has typed DELETE.
+ */
+export function accountDeletePath(accountUid: string): string {
+  return `${accountPath(accountUid)}?confirm=${encodeURIComponent(`DELETE ${accountUid}`)}`;
+}
+
+export function signalDefinitionPath(definitionUid: string): string {
+  return `${API_ENDPOINTS.signalDefinitions}/${encodeURIComponent(definitionUid)}`;
+}
+
+/** The signal's latest observations, oldest first, at most `limit` (the API allows 500). */
+export function signalDefinitionWeightsPath(definitionUid: string, limit: number): string {
+  return `${signalDefinitionPath(definitionUid)}/weights?limit=${limit}`;
+}
 
 export function assetRegistrationOperationPath(operationUid: string): string {
   return `${API_ENDPOINTS.assetRegistrationOperations}/${encodeURIComponent(operationUid)}`;
@@ -51,8 +84,13 @@ export interface Account {
    * were stored encrypted, not migrated yet (connector ADR 0017).
    */
   credential_source: "managed" | "imported" | "external";
-  /** False only while a registration made before encrypted storage awaits the migration. */
+  /**
+   * False once the owner removed the keys (`credentials_removed`), and while a registration made
+   * before encrypted storage awaits the credential migration.
+   */
   credentials_stored: boolean;
+  /** The owner removed the keys; runs fail until keys are entered again. Absent before 0029's API. */
+  credentials_removed?: boolean;
   credentials_updated_at: string | null;
   credentials_updated_by_user_uid: string | null;
   status: string | null;
@@ -172,14 +210,44 @@ export interface AccountUpdateRequest {
   key_request_uid?: string;
 }
 
-export interface AccountDeleteResponse {
+/** `POST /v1/accounts/{uid}/actions/remove-keys`: the keys are cleared, nothing else changes. */
+export interface AccountKeysRemovedResponse {
   account_uid: string;
-  registration_removed: boolean;
-  account_deactivated: boolean;
-  retained_holdings_sets: number;
+  keys_removed: boolean;
   /** Main Sequence Secrets deleted with a registration made before encrypted storage; else empty. */
   deleted_secrets: string[];
   warnings: string[];
+}
+
+/**
+ * `POST /v1/accounts/{uid}/actions/delete/preflight`: what deleting the account deletes, and
+ * what refuses it. A blocker never names another account (connector ADR 0019).
+ */
+export interface AccountDeletePreflightResponse {
+  account_uid: string;
+  allowed: boolean;
+  blockers: string[];
+  warnings: string[];
+  portfolio_count: number;
+  signal_definition_count: number;
+  bars_feed_count: number;
+  /** Portfolios that already ended, whose retired Portfolios the delete also deletes. */
+  ended_portfolio_count: number;
+}
+
+/** `DELETE /v1/accounts/{uid}?confirm=DELETE <uid>`: the account and all it owns are gone. */
+export interface AccountDeleteResponse {
+  account_uid: string;
+  deleted: boolean;
+  ended_portfolio_count: number;
+  deleted_portfolio_uids: string[];
+  /** Retired Portfolios another account's history names; they stay retired. */
+  kept_portfolio_uids: string[];
+  deleted_signal_uids: string[];
+  kept_signal_uids: string[];
+  /** Main Sequence Secrets deleted with a registration made before encrypted storage; else empty. */
+  deleted_secrets?: string[];
+  warnings?: string[];
 }
 
 export interface AssetRegistrationRequest {
@@ -264,17 +332,29 @@ export interface ResourceCollection<T> {
 }
 
 /**
- * Where a bars configuration takes its assets: explicit registered Asset UIDs, the account's latest
- * holdings, or every asset of the live portfolios valued with it.
+ * Where a bars configuration takes its assets. A feed of an account prices explicit registered
+ * Asset UIDs or the account's latest holdings; a portfolio's own configuration (`portfolios`)
+ * prices every asset its portfolio's signal has published (connector ADR 0028).
  */
 export type BarConfigurationAssetSource = "assets" | "account_holdings" | "portfolios";
+/** The sources a bars feed can be created with; a portfolio's own comes with its portfolio. */
+export type BarFeedAssetSource = Exclude<BarConfigurationAssetSource, "portfolios">;
 
+/**
+ * A bars configuration has exactly one parent: an account (a feed, `account_uid`) or a portfolio
+ * (its own, `portfolio_configuration_uid`), and is deleted with it.
+ */
 export interface BarConfiguration {
   uid: string;
   name: string;
   description: string | null;
   enabled: boolean;
-  account_uid: string;
+  /** Whether the daily bars update includes it; an unscheduled one still runs on demand. */
+  scheduled: boolean;
+  /** The account a feed belongs to; null for a portfolio's own. */
+  account_uid: string | null;
+  /** The portfolio a portfolio's own configuration belongs to; null for a feed. */
+  portfolio_configuration_uid: string | null;
   asset_source: BarConfigurationAssetSource;
   asset_uids: string[];
   frequency_id: string;
@@ -284,14 +364,26 @@ export interface BarConfiguration {
   updated_at: string;
 }
 
-/** Create body, also sent whole as the edit PATCH; the API rejects any other field. */
-export interface BarConfigurationWriteRequest {
+/** Create body of a bars feed, also sent whole as a feed's edit PATCH; the API rejects any other field. */
+export interface BarFeedWriteRequest {
   name: string;
   description: string | null;
   enabled: boolean;
+  scheduled: boolean;
   account_uid: string;
-  asset_source: BarConfigurationAssetSource;
+  asset_source: BarFeedAssetSource;
   asset_uids: string[];
+  frequency_id: string;
+  feed: string;
+  adjustment: string;
+}
+
+/** Edit PATCH of a portfolio's own configuration: its account and asset source are its portfolio's. */
+export interface PortfolioBarsUpdateRequest {
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  scheduled: boolean;
   frequency_id: string;
   feed: string;
   adjustment: string;
@@ -391,14 +483,24 @@ export interface PortfolioRebalanceConfigurationWriteRequest extends PortfolioRe
 }
 
 /**
- * A portfolio built from weights an application provides (connector ADR 0024). Only its owner, the
- * caller that created it, may change, pause, or delete it; the API answers anyone else 403.
+ * A portfolio built from weights an application provides (connector ADR 0024). It belongs to one
+ * account and follows one of that account's signal definitions (connector ADR 0028). Only its
+ * owner, the account's owner, may change, pause, or delete it; the API answers anyone else 403.
  */
 export interface PortfolioConfiguration {
   uid: string;
   name: string;
   description: string | null;
-  bars_configuration_uid: string;
+  /** The account the portfolio belongs to; null only before the adopt rollout gives it one. */
+  account_uid: string | null;
+  /** The account's signal definition the portfolio follows; null only before adoption. */
+  signal_definition_uid: string | null;
+  /** False for a portfolio created before accounts owned portfolios: it neither runs nor takes weights. */
+  adopted: boolean;
+  /** The Main Sequence signal whose weights it follows. */
+  signal_uid: string;
+  /** Its own bars configuration, or the feed a portfolio not yet adopted named. */
+  bars_configuration_uid: string | null;
   rebalance_configuration_uid: string;
   rebalance_strategy: PortfolioRebalanceStrategy;
   portfolio_uid: string | null;
@@ -423,6 +525,8 @@ export interface PortfolioLinkedBars {
   name: string;
   description: string | null;
   enabled: boolean;
+  /** Whether the daily bars update includes the portfolio's own bars configuration. */
+  scheduled: boolean;
   account_name: string;
   account_environment: "paper" | "live";
   asset_source: BarConfigurationAssetSource;
@@ -489,8 +593,9 @@ export interface CanonicalPortfolioDetail {
   observations: PortfolioValueObservation[];
 }
 
-/** The weights the application has given the portfolio so far. */
+/** The weights the application has given the portfolio's signal so far. */
 export interface PortfolioProvidedWeights {
+  signal_uid: string;
   first_observation_at: string | null;
   last_observation_at: string | null;
   asset_count: number;
@@ -501,6 +606,60 @@ export interface PortfolioConfigurationDetail extends PortfolioConfiguration {
   linked_bars: PortfolioLinkedBars;
   linked_rebalance: PortfolioLinkedRebalance;
   canonical_portfolio: CanonicalPortfolioDetail;
+}
+
+/**
+ * The one kind of signal this connector makes (connector ADR 0028): it belongs to one account, its
+ * key is the application's own, and only that account's portfolios follow it. The application
+ * creates it and publishes its weights; the site renames, inspects, and deletes it.
+ */
+export interface SignalDefinition {
+  uid: string;
+  account_uid: string;
+  key: string;
+  name: string;
+  description: string | null;
+  /** UID of the Main Sequence signal the weights publish to. */
+  signal_uid: string;
+  /** The account's portfolios that follow it; the API refuses to delete it while any does. */
+  portfolio_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Partial update: send only changed fields; the API rejects a body without fields. */
+export interface SignalDefinitionUpdateRequest {
+  name?: string;
+  description?: string | null;
+}
+
+/**
+ * `DELETE /v1/signal-definitions/{uid}`: refused with `409 signal_followed` while a portfolio
+ * follows it. The signal's weights are `deleted`, or `kept` while a retired portfolio follows it.
+ */
+export interface SignalDefinitionDeleteResponse {
+  uid: string;
+  deleted: boolean;
+  signal: { uid: string; state: "deleted" | "kept" };
+}
+
+export interface SignalObservationAsset {
+  asset_identifier: string;
+  symbol: string | null;
+  name: string | null;
+  /** One weight per entry of `time_indexes`; null where the asset was not in that observation. */
+  weights: (number | null)[];
+}
+
+/** A signal's latest observations, transposed: one row per asset, oldest observation first. */
+export interface SignalObservations {
+  configuration_uid: string | null;
+  signal_definition_uid: string | null;
+  signal_uid: string;
+  observation_count: number;
+  asset_count: number;
+  time_indexes: string[];
+  assets: SignalObservationAsset[];
 }
 
 export interface ApiTransport {

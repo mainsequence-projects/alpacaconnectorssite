@@ -47,6 +47,15 @@ const sidebars = {
         },
         {
           "type": "category",
+          "label": "Signals",
+          "link": {
+            "type": "doc",
+            "id": "surfaces/signals"
+          },
+          "items": []
+        },
+        {
+          "type": "category",
           "label": "Portfolios",
           "link": {
             "type": "doc",

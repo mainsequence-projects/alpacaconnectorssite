@@ -100,9 +100,12 @@ synthetic percentage. Polling stops after the application-owned ten-minute limit
 retrying forever when a worker disappears.
 
 Resource lists and detail pages are added only where the backend exposes authoritative pagination
-and discovery contracts. Accounts, Bars, Rebalance Configurations, and Portfolios currently
-satisfy that boundary. The two portfolio-related routes are sibling destinations in the
-**Portfolios** navigation group. Portfolio routes never ask the browser to invent an Environment or
+and discovery contracts. Accounts, Bars, Signals, Rebalance Configurations, and Portfolios
+currently satisfy that boundary. Discovery is the column contract: the SDK list shows exactly the
+columns the connector's discovery declares, rendered by the page's column of the same id, so a new
+column starts in the connector's discovery. A page adds its own filters (`filterDefinitions`), such
+as the portfolios' account and signal selects, for query parameters the discovery declares. The
+three portfolio-related routes are sibling destinations in the **Portfolios** navigation group. Portfolio routes never ask the browser to invent an Environment or
 pass JobRun business arguments.
 
 Short create, update, run, and delete requests use one application-owned modal with the SDK
@@ -117,15 +120,26 @@ ADR 0024). Creating one and giving it weights are the application's capabilities
 page has no create or edit form: it lists, inspects, and runs portfolios, and offers their owner's
 actions, pause and resume (`PATCH {scheduled}`) and delete, which retires the portfolio. The
 connector never names a portfolio's owner and answers anyone else `403`; the site shows those
-actions on every portfolio and reads a `403` as **Only the portfolio's owner can do this.** A
-portfolio holds only calculation intent: its Bars Configuration and Rebalance Configuration, the
+actions on every portfolio and reads a `403` as **Only the portfolio's owner can do this.** Every
+portfolio belongs to one account and follows one of its signal definitions (connector ADR 0028);
+one created before that shows **Not adopted** and is not run. A portfolio holds only calculation
+intent: its account, its signal, its own Bars Configuration and its Rebalance Configuration, the
 supported interpolation and valuation parameters (valuation column, maximum price staleness,
 missing-price policy, commission fee), and its `scheduled` flag. Schedule, compute, image, and
 deployment state belong to the shared portfolio Job that the connector declares in its workflow
 file; the portfolio pages show that Job read-only and never write it.
 
-Bars configurations take their assets from exactly one of the connector's three sources:
-explicit assets, an account's latest holdings, or the live portfolios that use their prices.
+A bars configuration has one parent (connector ADR 0028). A bars feed belongs to an account and
+takes its assets from explicit assets or the account's latest holdings; the Bars form creates and
+edits feeds. A portfolio's own configuration prices its signal's assets and comes and goes with its
+portfolio, so the page edits only its name, description, status, daily update, and profile, and
+never deletes it.
+
+Accounts keep the keys and the account apart (connector ADR 0028): **Remove keys** clears only the
+keys, and **Delete** first shows the connector's delete preflight, then deletes the account and
+everything it owns with the exact confirmation `confirm=DELETE <account uid>`. The Signals route
+reads signal definitions and their latest weights; renaming and deleting are the account owner's,
+and creating a signal or publishing weights is the application's.
 
 Rebalance Configurations own execution timing (connector ADR 0009): the `calendar_event_signal`
 strategy, calendar, session, market event, signed offset, cadence, and weekly weekday. New

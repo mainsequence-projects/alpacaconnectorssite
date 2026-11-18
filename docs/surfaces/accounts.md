@@ -71,26 +71,51 @@ stored keys. An account registered before keys were stored encrypted, whose keys
 Main Sequence Secrets, switches to encrypted storage when rotated; the Secrets it was imported
 from are left unchanged. The fields are cleared after saving or cancelling.
 
+After the owner removed an account's keys, the section says so: entering both new keys stores them
+again, and the account's portfolios and bars feeds run with them.
+
 ## Detail view
 
 Selecting an account row opens that account's detail view. It shows how the credentials were
 provided (**Stored by this application** for keys entered here, **Imported from Main Sequence
 Secrets** for keys the connector copied once from Secrets named through its CLI or Agent), whether
-the keys are **Stored encrypted** or still **Awaiting migration**, and when the credentials were
-last updated. It never shows key values or Secret names. Only after the row is selected does the application query
+the keys are **Stored encrypted**, **Removed** by the owner, or still **Awaiting migration**, and
+when the credentials were last updated; the account list's **Keys** column shows the same state. It
+never shows key values or Secret names. Only after the row is selected does the application query
 `/v1/accounts/{account_uid}/holdings/latest`; the account collection never preloads holdings
 for every account. The embedded list is scoped to the newest immutable holdings snapshot and can
 be refreshed independently.
 
-## Removing an account
+## Removing keys and deleting an account
 
-Deleting removes the Alpaca registration, its stored keys included, and deactivates the account
-while retaining historical holdings snapshots; registering the account again requires its keys.
-Main Sequence Secrets the account was imported from are never deleted. For an account registered
-before encrypted storage and not yet migrated, removal also deletes the Secrets this application
-created for it, and the confirmation dialog says so. Any bars configuration that references the
-removed account can no longer run.
+An account owns its portfolios, its signals and its bars feeds (connector ADR 0028). Removing its
+keys and deleting it are two separate actions in the row's **Actions** menu, and both are the
+account owner's: the connector refuses anyone else, and the dialog shows its message, **This Alpaca
+account is registered to another owner.**
 
-The account table uses the API's canonical collection and discovery contracts. Its discovered
-actions also expose holdings capture and confirmed registration removal where the backend allows
-them.
+**Remove keys** clears the stored keys after you type `REMOVE`
+(`POST /v1/accounts/{account_uid}/actions/remove-keys`). The owner, the account, its history, its
+portfolios, signals and bars feeds stay, and nothing is disabled: runs on the account fail until its
+owner enters keys again with **Edit**. The row then shows **Removed** keys and no longer offers the
+action. Main Sequence Secrets the keys were imported from are kept; for an account registered
+before encrypted storage and not yet migrated, the Secrets this application created for it are
+deleted, and the result names them. To remove the keys of several accounts at once, select their
+rows and choose **Remove keys** from the selection's **Actions**: the connector's bulk action, which
+checks the selection with its preflight first.
+
+**Delete** deletes the account and everything that belongs to it. The dialog first runs the
+connector's delete preflight (`POST /v1/accounts/{account_uid}/actions/delete/preflight`), which
+changes nothing, and lists what would go: the account's portfolios, each retired and then deleted
+unless another account's history names it; its signals with their published weights; its bars
+feeds (the shared price tables keep their bars); the retired portfolios it recorded; and its
+holdings, orders, trades and targets. When the preflight reports a blocker, such as another
+account's current target holding one of the account's portfolios, the dialog shows it, never names
+the other account, and offers no confirmation: nothing is deleted until that account's owner changes
+its target. Otherwise type `DELETE` and select **Delete account**; the site sends the connector's
+exact confirmation, `DELETE /v1/accounts/{account_uid}?confirm=DELETE%20<account_uid>`. The result
+says how many portfolios ended and signals went, and which retired portfolios stay because another
+account's history names them. Deleting cannot be undone: registering the account again starts it
+with no history. Use **Remove keys** to keep the account.
+
+The account table uses the API's canonical collection and discovery contracts; its columns and its
+bulk actions, capture holdings and remove keys, come from the connector's discovery.

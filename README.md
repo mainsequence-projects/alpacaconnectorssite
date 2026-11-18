@@ -1,11 +1,13 @@
 # Alpaca Connectors Command Center
 
 Embedded React application for the Alpaca Connectors FastAPI surface. It provides project-state
-visibility, asset-registration workflows, account registration, stored bars configurations,
-rebalance configurations, and the portfolios applications build from the weights they provide,
+visibility, asset-registration workflows, account registration, key removal and deletion, the
+bars feeds of accounts, each account's signals, rebalance configurations, and the portfolios that
+belong to each account and follow the weights its applications provide (connector ADR 0028),
 without duplicating the backend business logic. Account forms accept
 the Alpaca API key and secret key as write-only password fields; the API validates them with Alpaca
-and stores them as Main Sequence Secrets, and the application never displays them again.
+and stores them encrypted on the account (connector ADR 0017), and the application never displays
+them again.
 
 ## Architecture decisions
 

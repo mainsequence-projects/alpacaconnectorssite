@@ -1,20 +1,25 @@
 # Portfolios
 
-The **Portfolios** navigation group contains two sibling applications:
+The **Portfolios** navigation group contains three sibling applications:
 
+- **[Signals](signals.md)** inspects each account's signals and their latest weights, and lets the
+  account's owner rename or delete them;
 - **Rebalance Configurations** maintains reusable calendar-event rebalance policies; and
 - **Portfolios** lists, inspects, and runs the connector's portfolios, and lets a portfolio's
   owner pause, resume, or delete it.
 
 The connector keeps only portfolios built from weights an application provides (connector
-ADR 0024). Creating a portfolio and giving it weights are the application's capabilities, so the
-site never offers them: the Portfolios application opens directly on the portfolio list and has no
-create or edit form.
+ADR 0024), and every portfolio belongs to one account (connector ADR 0028). Creating a portfolio
+and its signal and giving the signal weights are the application's capabilities, so the site never
+offers them: the Portfolios application opens directly on the portfolio list and has no create or
+edit form.
 
 Each portfolio composes:
 
-- the weights an application provides;
-- one enabled Alpaca Bars Configuration, its valuation source;
+- the account it belongs to;
+- one of that account's signals, whose weights the application provides;
+- its own Alpaca Bars Configuration, its valuation source, which prices every asset its signal has
+  published with the account's keys;
 - one reusable Rebalance Configuration;
 - persistent daily `InterpolatedPrices` using forward-fill interpolation;
 - the valuation column, maximum price staleness, missing-price policy, and commission fee; and
@@ -25,11 +30,21 @@ Organization Environment. Each run selects its portfolio with `--configuration-u
 
 ## Ownership
 
-A portfolio belongs to the caller that created it. Only its owner can change, pause, resume, or
-delete it; the connector answers anyone else `403`, and the site then reads **Only the
-portfolio's owner can do this.** Anyone who can open the site can list, inspect, and run every
-portfolio. The connector never names a portfolio's owner, so the site shows the owner's actions on
-every portfolio and lets the connector decide.
+A portfolio belongs to one account, and its owner is the account's owner. Only its owner can
+change, pause, resume, or delete it; the connector answers anyone else `403`, and the site then
+reads **Only the portfolio's owner can do this.** Anyone who can open the site can list, inspect,
+and run every portfolio. The connector never names a portfolio's owner, so the site shows the
+owner's actions on every portfolio and lets the connector decide. Rebalance configurations stay
+independent of accounts.
+
+The list shows each portfolio's **Account** and **Signal**, and its **Account** and **Signal**
+filters narrow it to one account's portfolios or to those following one signal; the signal filter
+offers the selected account's signals.
+
+A portfolio created before accounts owned portfolios shows **Not adopted** until the connector's
+adopt rollout gives it its account and a signal, or ends it. It does not run or take weights until
+then: **Run now** is not offered, the connector refuses a run with `409 portfolio_not_adopted`, and
+its detail explains why.
 
 The portfolio is the source of truth for calculation intent and for its scheduled flag. It does not
 copy the Bars Configuration's source table or any Job schedule, compute, image, or deployment
@@ -107,15 +122,16 @@ fills, volume participation, market impact, or slippage beyond the configured co
 
 ## Running and inspecting
 
-Use **Run now** only after the shared Job image is ready; it works whether or not the portfolio is
-paused. The connector refuses a run while the portfolio's previous run is still pending or running,
+Use **Run now** only after the shared Job image is ready and the portfolio has its account; it works
+whether or not the portfolio is paused. The connector refuses a run while the portfolio's previous run is still pending or running,
 or while its preflight is blocked: a run requires existing, enabled linked configurations and
 weights, plus source bars for the weighted assets and the migrated persistent interpolation
 storage. The portfolio run updates interpolation and calculates the ms-markets portfolio without
 rerunning the raw-bars producer.
 
-Select a row to load its business-facing detail on demand. The detail shows how many assets the
-portfolio's weights cover and when it was first and last given weights, the Bars scope and profile,
+Select a row to load its business-facing detail on demand. The detail shows its account and the
+signal it follows, how many assets the signal's weights cover and when they were first and last
+published, its own bars configuration with its scope, profile and daily update,
 the Rebalance policy with its calendar, event, and cadence, the maximum price staleness, the shared
 Job's settings, and the canonical portfolio calendar, without exposing their internal UIDs. It also
 queries up to the latest 2,500 canonical daily values and renders portfolio value and drawdown
@@ -131,6 +147,8 @@ Alpha and beta are omitted because no benchmark is configured.
 ## Deleting
 
 **Delete** is the owner's. The connector retires the portfolio rather than erasing it: it stops
-running, and its published values and weights remain as its record, as do the shared Job's past
-runs. An account whose target still holds the portfolio blocks the deletion until the account
-drops it.
+running, and its published values remain as its record, as do the shared Job's past runs. Its own
+bars configuration is deleted with it; the signal it follows stays with its signal definition,
+which the account's owner deletes from **Signals** once no portfolio follows it. An account whose
+target still holds the portfolio blocks the deletion until the account drops it. Deleting the
+account deletes all of its portfolios ([Accounts](accounts.md#removing-keys-and-deleting-an-account)).

@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page, type Request } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page, type Request } from "@playwright/test";
 import { assertCommandCenterPageLayout } from "@dev-mainsequence/command-center-sdk/layout/testing";
 
 test("opens Assets in the SDK navigation shell and conforms at Command Center viewports", async ({ page }) => {
@@ -24,11 +24,12 @@ test("opens Assets in the SDK navigation shell and conforms at Command Center vi
   await expect(page.getByRole("link", { name: /^Accounts/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^Bars/ })).toBeVisible();
   await expect(navigation.getByText("Portfolios", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /^Signals/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^Rebalance Configurations/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^Portfolios/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^Documentation/ })).toBeVisible();
-  // Those six destinations and no other.
-  await expect(navigation.getByRole("link")).toHaveCount(6);
+  // Those seven destinations and no other.
+  await expect(navigation.getByRole("link")).toHaveCount(7);
   await assertCommandCenterPageLayout(page);
 });
 
@@ -43,6 +44,7 @@ test("calls only the connector routes its pages use", async ({ page }) => {
     ["/", /AAPL/],
     ["/accounts", /Paper account/],
     ["/bars", /Daily paper holdings/],
+    ["/signals", /Momentum/],
     ["/rebalance-configurations", /NYSE close/],
     ["/portfolios", /Daily momentum portfolio/],
   ] as const) {
@@ -57,6 +59,7 @@ test("calls only the connector routes its pages use", async ({ page }) => {
     "/v1/assets",
     "/v1/accounts",
     "/v1/market-data/bar-configurations",
+    "/v1/signal-definitions",
     "/v1/portfolio-rebalance-configurations",
     "/v1/portfolio-configurations",
   ];
@@ -84,6 +87,24 @@ function trackAccountTraffic(page: Page) {
     }
   });
   return { requestUrls, accountWrites };
+}
+
+/** An account row's actions sit in its Actions menu: it has more than two. */
+async function chooseRowAction(page: Page, row: Locator, action: string) {
+  await row.getByRole("button", { name: "Actions" }).click();
+  await page.getByRole("menuitem", { name: action, exact: true }).click();
+}
+
+async function createAccount(request: APIRequestContext, name: string, suffix: string) {
+  const response = await request.post(`${E2E_API_ORIGIN}/v1/accounts`, {
+    data: {
+      account_name: name,
+      environment: "paper",
+      credentials: { source: "managed", api_key: `AKE2E${suffix}KEY`, secret_key: `e2e${suffix}SecretKey` },
+    },
+  });
+  expect(response.status()).toBe(201);
+  return await response.json() as { uid: string; unique_identifier: string };
 }
 
 function expectNoCredentialLeak(requestUrls: string[], values: string[]) {
@@ -184,7 +205,7 @@ test("registers an account from Alpaca keys after a preflight review", async ({ 
   expectNoCredentialLeak(requestUrls, [LIVE_API_KEY, LIVE_SECRET_KEY]);
 });
 
-test("edits, rotates, inspects, and removes a managed account", async ({ page, request }) => {
+test("edits, rotates, inspects, and deletes a managed account", async ({ page, request }) => {
   const legacyRegistration = await request.post(`${E2E_API_ORIGIN}/v1/accounts`, {
     data: {
       account_name: "Legacy request",
@@ -211,7 +232,7 @@ test("edits, rotates, inspects, and removes a managed account", async ({ page, r
   const saveChanges = form.getByRole("button", { name: "Save changes" });
   const accountPath = `/v1/accounts/${created.uid}`;
 
-  await row.getByRole("button", { name: "Edit" }).click();
+  await chooseRowAction(page, row, "Edit");
   await expect(page.getByRole("heading", { name: "Edit account registration" })).toBeVisible();
   await expect(form.getByRole("heading", { name: "Rotate credentials" })).toBeVisible();
   await expect(form.getByText("Leave both fields empty to keep the current credentials.", { exact: false })).toBeVisible();
@@ -227,12 +248,12 @@ test("edits, rotates, inspects, and removes a managed account", async ({ page, r
     { method: "PATCH", path: accountPath, body: { account_name: "Rotation desk renamed", account_is_active: false } },
   ]);
 
-  await row.getByRole("button", { name: "Edit" }).click();
+  await chooseRowAction(page, row, "Edit");
   await newApiKey.fill(ROTATED_API_KEY);
   await expect(form.getByText("Enter both the new API key and the new secret key", { exact: false })).toBeVisible();
   await expect(saveChanges).toBeDisabled();
   await form.getByRole("button", { name: "Cancel edit" }).click();
-  await row.getByRole("button", { name: "Edit" }).click();
+  await chooseRowAction(page, row, "Edit");
   await expect(newApiKey).toHaveValue("");
   await expect(newSecretKey).toHaveValue("");
   await newApiKey.fill(ROTATED_API_KEY);
@@ -246,7 +267,7 @@ test("edits, rotates, inspects, and removes a managed account", async ({ page, r
       body: { credentials: { source: "managed", api_key: ROTATED_API_KEY, secret_key: ROTATED_SECRET_KEY } },
     },
   ]);
-  await row.getByRole("button", { name: "Edit" }).click();
+  await chooseRowAction(page, row, "Edit");
   await expect(newApiKey).toHaveValue("");
   await expect(newSecretKey).toHaveValue("");
   await form.getByRole("button", { name: "Cancel edit" }).click();
@@ -260,15 +281,187 @@ test("edits, rotates, inspects, and removes a managed account", async ({ page, r
   await expect(page.getByText(ROTATED_API_KEY)).toHaveCount(0);
   await page.getByRole("button", { name: "Back to accounts" }).click();
 
-  await row.getByRole("button", { name: "Delete" }).click();
-  const dialog = page.getByRole("dialog", { name: "Remove account registration" });
-  await expect(dialog).toContainText("delete its stored keys");
+  const deletes: string[] = [];
+  page.on("request", (sent) => {
+    if (sent.method() === "DELETE") deletes.push(sent.url());
+  });
+  await chooseRowAction(page, row, "Delete");
+  const dialog = page.getByRole("dialog", { name: "Delete account" });
+  await expect(dialog).toContainText("everything that belongs to it");
+  await expect(dialog.getByText("Preflight passed", { exact: true })).toBeVisible();
   await dialog.getByLabel("Confirmation word").fill("DELETE");
-  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await dialog.getByRole("button", { name: "Delete account", exact: true }).click();
   await expect(row).toHaveCount(0);
-  await expect(page.getByText("Removed Rotation desk renamed.", { exact: false })).toBeVisible();
+  await expect(page.getByText("Deleted Rotation desk renamed and everything that belonged to it.", { exact: false })).toBeVisible();
   await expect(page.getByText("Deleted stored credential Secrets", { exact: false })).toHaveCount(0);
+  // The API takes only the exact confirmation for this account.
+  expect(deletes.map((url) => new URL(url).searchParams.get("confirm"))).toEqual([`DELETE ${created.uid}`]);
   expectNoCredentialLeak(requestUrls, [ROTATED_API_KEY, ROTATED_SECRET_KEY]);
+});
+
+test("removes an account's keys, keeps everything else, and stores new keys again", async ({ page, request }) => {
+  const created = await createAccount(request, "Keys desk", "KEYS0004");
+  const removals: Array<{ path: string; body: unknown }> = [];
+  page.on("request", (sent) => {
+    const url = new URL(sent.url());
+    if (sent.method() === "POST" && url.pathname.endsWith("/actions/remove-keys")) {
+      removals.push({ path: url.pathname, body: sent.postDataJSON() });
+    }
+  });
+
+  await page.goto("/accounts");
+  const row = page.getByRole("row", { name: /Keys desk/ });
+  await expect(row).toContainText("Stored encrypted");
+  await chooseRowAction(page, row, "Remove keys");
+  const dialog = page.getByRole("dialog", { name: "Remove account keys" });
+  await expect(dialog).toContainText("portfolios, signals and bars feeds stay");
+  await expect(dialog.getByRole("button", { name: "Remove keys", exact: true })).toBeDisabled();
+  await dialog.getByLabel("Confirmation word").fill("REMOVE");
+  await dialog.getByRole("button", { name: "Remove keys", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Removed the keys of Keys desk." })).toBeVisible();
+  await expect(row).toContainText("Removed");
+  expect(removals).toEqual([{ path: `/v1/accounts/${created.uid}/actions/remove-keys`, body: {} }]);
+
+  // Removing them again is not offered; the account and its detail stay.
+  await row.getByRole("button", { name: "Actions" }).click();
+  await expect(page.getByRole("menuitem", { name: "Remove keys", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await row.getByText("Keys desk", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Keys desk", exact: true })).toBeVisible();
+  await expect(page.getByText("This account's keys were removed.", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Back to accounts" }).click();
+
+  await chooseRowAction(page, row, "Edit");
+  const form = page.locator("form.workflow-form");
+  await expect(form.getByText("runs on it fail until you enter new keys here", { exact: false })).toBeVisible();
+  await form.getByLabel("New API key").fill(ROTATED_API_KEY);
+  await form.getByLabel("New secret key").fill(ROTATED_SECRET_KEY);
+  await form.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("heading", { name: "Edit account registration" })).toHaveCount(0);
+  await expect(row).toContainText("Stored encrypted");
+});
+
+test("removes keys from the selected accounts through the API's bulk action", async ({ page, request }) => {
+  const created = await createAccount(request, "Bulk desk", "BULK0005");
+  const preflights: unknown[] = [];
+  page.on("request", (sent) => {
+    if (new URL(sent.url()).pathname === "/v1/accounts/actions/remove-keys/preflight") preflights.push(sent.postDataJSON());
+  });
+
+  await page.goto("/accounts");
+  const row = page.getByRole("row", { name: /Bulk desk/ });
+  await row.getByRole("checkbox").check();
+  await page.locator(".cc-resource-selection-bar").getByRole("button", { name: "Actions" }).click();
+  await page.getByRole("menuitem", { name: "Remove keys", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("The stored keys will be removed.", { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "Remove keys", exact: true }).click();
+  await expect(page.getByText("Remove keys completed.", { exact: true })).toBeVisible();
+  await expect(row).toContainText("Removed");
+  expect(preflights).toEqual([{ selection: { mode: "explicit", uids: [created.uid] }, options: {} }]);
+});
+
+test("previews an account delete and deletes its portfolios, signals and bars with it", async ({ page, request }) => {
+  const created = await createAccount(request, "Delete desk", "DELETE0006");
+  const feed = await request.post(`${E2E_API_ORIGIN}/v1/market-data/bar-configurations`, {
+    data: {
+      name: "Delete desk holdings",
+      description: null,
+      enabled: true,
+      scheduled: true,
+      account_uid: created.uid,
+      asset_source: "account_holdings",
+      asset_uids: [],
+      frequency_id: "1d",
+      feed: "sip",
+      adjustment: "all",
+    },
+  });
+  expect(feed.status()).toBe(201);
+  const signal = await (await request.post(`${E2E_API_ORIGIN}/v1/signal-definitions`, {
+    data: { account_uid: created.uid, key: "desk/momentum", name: "Desk momentum" },
+  })).json() as { uid: string };
+  const portfolio = await request.post(`${E2E_API_ORIGIN}/v1/portfolio-configurations`, {
+    data: {
+      name: "Desk portfolio",
+      account_uid: created.uid,
+      signal_definition_uid: signal.uid,
+      rebalance_configuration_uid: "rebalance-nyse-close",
+    },
+  });
+  expect(portfolio.status()).toBe(201);
+
+  await page.goto("/accounts");
+  const row = page.getByRole("row", { name: /Delete desk/ });
+  await chooseRowAction(page, row, "Delete");
+  const dialog = page.getByRole("dialog", { name: "Delete account" });
+  const impact = (message: string) => dialog.locator("li").filter({ hasText: message });
+  await expect(impact("Portfolios that end and are deleted")).toContainText("1");
+  await expect(impact("Signals deleted with their published weights")).toContainText("1");
+  await expect(impact("Bars feeds deleted")).toContainText("1");
+  await expect(impact("holdings, orders, trades and targets")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Delete account", exact: true })).toBeDisabled();
+  await dialog.getByLabel("Confirmation word").fill("DELETE");
+  await dialog.getByRole("button", { name: "Delete account", exact: true }).click();
+  await expect(page.getByText("1 portfolio ended; 1 retired Portfolio deleted.", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 signal deleted with its weights.", { exact: true })).toBeVisible();
+  await expect(row).toHaveCount(0);
+
+  await page.goto("/portfolios");
+  await expect(page.getByRole("row", { name: /Daily momentum portfolio/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Desk portfolio/ })).toHaveCount(0);
+  await page.goto("/signals");
+  await expect(page.getByRole("row", { name: /Momentum/ }).first()).toBeVisible();
+  await expect(page.getByRole("row", { name: /Desk momentum/ })).toHaveCount(0);
+  await page.goto("/bars");
+  await expect(page.getByRole("row", { name: /Daily paper holdings/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Delete desk holdings/ })).toHaveCount(0);
+  await expect(page.getByRole("row", { name: /Desk portfolio prices/ })).toHaveCount(0);
+});
+
+test("shows what blocks an account delete and changes nothing", async ({ page, request }) => {
+  const created = await createAccount(request, "Held desk", "HELD0007");
+  const blocker = "1 of the account's portfolios are held by another account's current target; that account's owner must change its target first.";
+  await request.post(`${E2E_API_ORIGIN}/__account-delete-blockers`, {
+    data: { account_uid: created.uid, blockers: [blocker] },
+  });
+  const deletes: string[] = [];
+  page.on("request", (sent) => {
+    if (sent.method() === "DELETE") deletes.push(sent.url());
+  });
+
+  await page.goto("/accounts");
+  const row = page.getByRole("row", { name: /Held desk/ });
+  await chooseRowAction(page, row, "Delete");
+  const dialog = page.getByRole("dialog", { name: "Delete account" });
+  await expect(dialog.getByText("Action blocked", { exact: true }).first()).toBeVisible();
+  await expect(dialog.getByText(blocker, { exact: true })).toBeVisible();
+  await expect(dialog.getByLabel("Confirmation word")).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Action blocked" })).toBeDisabled();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(row).toBeVisible();
+  expect(deletes).toEqual([]);
+  await request.post(`${E2E_API_ORIGIN}/__account-delete-blockers`, { data: { account_uid: created.uid, blockers: [] } });
+});
+
+test("tells a person who does not own an account that only its owner removes its keys or deletes it", async ({ page }) => {
+  await page.goto("/accounts");
+  const row = page.getByRole("row", { name: /Shared income account/ });
+  await chooseRowAction(page, row, "Remove keys");
+  const removeDialog = page.getByRole("dialog", { name: "Remove account keys" });
+  await removeDialog.getByLabel("Confirmation word").fill("REMOVE");
+  await removeDialog.getByRole("button", { name: "Remove keys", exact: true }).click();
+  await expect(removeDialog.getByText("This Alpaca account is registered to another owner.", { exact: true })).toBeVisible();
+  await removeDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(row).toContainText("Stored encrypted");
+
+  await chooseRowAction(page, row, "Delete");
+  const deleteDialog = page.getByRole("dialog", { name: "Delete account" });
+  await expect(deleteDialog.getByText("Preflight could not be completed", { exact: true })).toBeVisible();
+  await expect(deleteDialog.getByText("This Alpaca account is registered to another owner.", { exact: true })).toBeVisible();
+  await expect(deleteDialog.getByRole("button", { name: "Preflight unavailable" })).toBeDisabled();
+  await deleteDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(row).toBeVisible();
 });
 
 test("shows an Alpaca credential rejection without enabling registration", async ({ page }) => {
@@ -480,7 +673,7 @@ test("plans and executes asset registration through the observable operation", a
   await expect(page.getByRole("heading", { name: "Registration execution" })).toBeVisible();
 });
 
-test("creates, reads, updates, and deletes a bars configuration", async ({ page }) => {
+test("creates, reads, updates, and deletes a bars feed of an account", async ({ page }) => {
   let createPayload: Record<string, unknown> | null = null;
   page.on("request", (request) => {
     const url = new URL(request.url());
@@ -491,20 +684,23 @@ test("creates, reads, updates, and deletes a bars configuration", async ({ page 
 
   await page.goto("/bars");
   await expect(page.getByRole("heading", { level: 1, name: "Bars configurations" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Create bars configuration" })).toBeVisible();
-  await expect(page.getByRole("row", { name: /Daily paper holdings/ })).toContainText("Latest account holdings");
-  await expect(page.getByRole("row", { name: /Daily portfolio prices/ })).toContainText("Portfolio assets");
+  await expect(page.getByRole("heading", { name: "Create bars feed" })).toBeVisible();
+  const holdings = page.getByRole("row", { name: /Daily paper holdings/ });
+  await expect(holdings).toContainText("Latest account holdings");
+  await expect(holdings).toContainText("Paper account (paper)");
+  const portfolioBars = page.getByRole("row", { name: /Daily momentum portfolio prices/ });
+  await expect(portfolioBars).toContainText("Daily momentum portfolio");
+  await expect(portfolioBars).not.toContainText("Paper account (paper)");
+  await expect(portfolioBars).toContainText("Its portfolio's assets");
 
-  await page.getByLabel("Name").fill("Daily portfolio assets");
+  await page.getByLabel("Name").fill("Daily explicit assets");
   await page.getByLabel("Registered Alpaca account").selectOption("account-paper");
   await page.getByRole("button", { name: "Asset source" }).click();
-  // The connector's three asset sources, and no other.
-  await expect(page.getByRole("listbox", { name: "Asset source" }).getByRole("option")).toHaveCount(3);
+  // A feed prices explicit assets or its account's holdings; a portfolio's own comes with it.
+  await expect(page.getByRole("listbox", { name: "Asset source" }).getByRole("option")).toHaveCount(2);
   await expect(page.getByRole("option", { name: /Latest account holdings/ })).toBeVisible();
-  await expect(page.getByRole("option", { name: /Explicit assets/ })).toBeVisible();
-  await expect(page.getByRole("option", { name: /Portfolio assets/ })).toBeVisible();
-  await page.getByRole("option", { name: /Portfolio assets/ }).click();
-  await expect(page.getByText("every asset of the live portfolios that use this configuration's prices", { exact: false })).toBeVisible();
+  await page.getByRole("option", { name: /Explicit assets/ }).click();
+  await page.getByLabel("Registered Asset UIDs").fill("asset-aapl, asset-msft");
   await page.getByRole("button", { name: "Migrated Bars profile" }).click();
   await expect(page.getByRole("option", { name: /Daily · IEX · Raw \(unadjusted\)/ })).toContainText(
     "prices are not adjusted for corporate actions",
@@ -516,36 +712,83 @@ test("creates, reads, updates, and deletes a bars configuration", async ({ page 
   await expect(page.getByRole("button", { name: "Migrated Bars profile" })).toContainText(
     "Adjusted (all corporate actions)",
   );
-  await page.getByRole("button", { name: "Create configuration" }).click();
-  await expect(page.getByRole("heading", { name: "Created Daily portfolio assets." })).toBeVisible();
-  // Exactly the connector's create model: the portfolios source takes no asset list.
+  await page.getByLabel("Include in the daily bars update").uncheck();
+  await page.getByRole("button", { name: "Create feed" }).click();
+  await expect(page.getByRole("heading", { name: "Created Daily explicit assets." })).toBeVisible();
+  // Exactly the connector's feed create model.
   expect(createPayload).toEqual({
-    name: "Daily portfolio assets",
+    name: "Daily explicit assets",
     description: null,
     enabled: true,
+    scheduled: false,
     account_uid: "account-paper",
-    asset_source: "portfolios",
-    asset_uids: [],
+    asset_source: "assets",
+    asset_uids: ["asset-aapl", "asset-msft"],
     frequency_id: "1d",
     feed: "sip",
     adjustment: "all",
   });
 
-  let createdRow = page.getByRole("row", { name: /Daily portfolio assets/ });
-  await expect(createdRow).toContainText("Portfolio assets");
+  let createdRow = page.getByRole("row", { name: /Daily explicit assets/ });
+  await expect(createdRow).toContainText("Explicit assets");
+  await expect(createdRow).toContainText("On demand");
   await createdRow.getByRole("button", { name: "Edit" }).click();
-  await expect(page.getByRole("heading", { name: "Edit bars configuration" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Asset source" })).toContainText("Portfolio assets");
-  await page.getByLabel("Name").fill("Daily portfolio assets updated");
+  await expect(page.getByRole("heading", { name: "Edit bars feed" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Asset source" })).toContainText("Explicit assets");
+  await page.getByLabel("Name").fill("Daily explicit assets updated");
   await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByRole("heading", { name: "Updated Daily portfolio assets updated." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Updated Daily explicit assets updated." })).toBeVisible();
 
-  createdRow = page.getByRole("row", { name: /Daily portfolio assets updated/ });
+  createdRow = page.getByRole("row", { name: /Daily explicit assets updated/ });
   await createdRow.getByRole("button", { name: "Delete" }).click();
-  const dialog = page.getByRole("dialog", { name: "Delete bars configuration" });
+  const dialog = page.getByRole("dialog", { name: "Delete bars feed" });
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(createdRow).toHaveCount(0);
+});
+
+test("keeps a portfolio's own bars configuration with its portfolio", async ({ page }) => {
+  const patches: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "PATCH" && url.pathname === "/v1/market-data/bar-configurations/bars-portfolio-existing") {
+      patches.push(request.postDataJSON() as Record<string, unknown>);
+    }
+  });
+
+  await page.goto("/bars");
+  const row = page.getByRole("row", { name: /Daily momentum portfolio prices/ });
+  // It is deleted only with its portfolio.
+  await expect(row.getByRole("button", { name: "Delete" })).toBeDisabled();
+  await row.getByRole("button", { name: "Edit" }).click();
+  await expect(page.getByRole("heading", { name: "Edit a portfolio's bars configuration" })).toBeVisible();
+  const form = page.locator("form.workflow-form");
+  await expect(form.getByLabel("Belongs to")).toHaveValue("Portfolio · Daily momentum portfolio");
+  await expect(form.getByLabel("Registered Alpaca account")).toHaveCount(0);
+  await expect(form.getByLabel("Asset source")).toHaveValue("Every asset its portfolio's signal has published");
+  await form.getByLabel("Name").fill("Momentum portfolio prices");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("heading", { name: "Updated Momentum portfolio prices." })).toBeVisible();
+  // Its account and asset source are its portfolio's: the edit never sends them.
+  expect(patches).toEqual([{
+    name: "Momentum portfolio prices",
+    description: "Daily SIP bars for the portfolio's assets.",
+    enabled: true,
+    scheduled: true,
+    frequency_id: "1d",
+    feed: "sip",
+    adjustment: "all",
+  }]);
+
+  // A feed only portfolios not yet adopted name cannot change until the rollout deletes it.
+  const legacy = page.getByRole("row", { name: /Legacy portfolio prices/ });
+  await expect(legacy).toContainText("Assets of the portfolios that name it");
+  await expect(legacy.getByRole("button", { name: "Edit" })).toBeDisabled();
+
+  await page.getByRole("button", { name: "Belongs to", exact: true }).click();
+  await page.getByRole("option", { name: "Portfolios' own" }).click();
+  await expect(page.getByRole("row", { name: /Momentum portfolio prices/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Daily paper holdings/ })).toHaveCount(0);
 });
 
 test("shows bars request failures in a dismissible modal", async ({ page }) => {
@@ -563,7 +806,7 @@ test("shows bars request failures in a dismissible modal", async ({ page }) => {
 
   await page.goto("/bars");
   await page.getByLabel("Name").fill("Broken bars request");
-  await page.getByRole("button", { name: "Create configuration" }).click();
+  await page.getByRole("button", { name: "Create feed" }).click();
 
   const errorDialog = page.getByRole("dialog", {
     name: "Bars configuration request failed",
@@ -604,10 +847,12 @@ test("loads a portfolio's details, weights, and value history only after portfol
   await expect(page.getByRole("heading", { name: "Portfolio construction" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Valuation source" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Execution and calendar" })).toBeVisible();
-  await expect(page.getByText("Daily portfolio prices", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/^(Daily momentum|Momentum) portfolio prices$/).first()).toBeVisible();
   const construction = page.locator("details").filter({ hasText: "Portfolio construction" });
   await expect(construction.getByRole("heading", { name: "Weights", exact: true })).toBeVisible();
-  await expect(construction.getByText("Provided by an application", { exact: true })).toBeVisible();
+  await expect(construction.locator("dt", { hasText: /^Account$/ }).locator("xpath=following-sibling::dd[1]")).toHaveText("Paper account (paper)");
+  await expect(construction.locator("dt", { hasText: /^Signal$/ }).locator("xpath=following-sibling::dd[1]")).toHaveText("Momentum · momentum");
+  await expect(construction.getByText("Published to the signal by the account owner's application", { exact: true })).toBeVisible();
   await expect(construction.locator("dt", { hasText: /^Assets$/ }).locator("xpath=following-sibling::dd[1]")).toHaveText("3");
   // A portfolio built from provided weights has no signal configuration to show.
   await expect(construction.getByRole("heading", { name: "Signal", exact: true })).toHaveCount(0);
@@ -619,7 +864,8 @@ test("loads a portfolio's details, weights, and value history only after portfol
   const valuation = page.locator("details").filter({ hasText: "Valuation source" });
   await valuation.locator("summary").click();
   await expect(valuation.getByText("1 day (86400 seconds)", { exact: true })).toBeVisible();
-  await expect(valuation.getByText("Every asset of the live portfolios that use these prices", { exact: true })).toBeVisible();
+  await expect(valuation.getByText("Every asset the portfolio's signal has published", { exact: true })).toBeVisible();
+  await expect(valuation.getByText(/ · the portfolio's own$/)).toBeVisible();
   await expect(page.getByText("Portfolio valuation cadence", { exact: true })).toHaveCount(0);
   await page.locator("details").filter({ hasText: "Execution and calendar" }).locator("summary").click();
   await expect(page.getByText("NYSE trading calendar · exchange_calendar", { exact: true })).toBeVisible();
@@ -669,8 +915,11 @@ test("runs and deletes portfolios built from provided weights and never creates 
   await page.goto("/portfolios");
   await expect(page.getByRole("heading", { level: 1, name: "Portfolios" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "Portfolios" })).toBeVisible();
-  await expect(page.getByText("the application creates them and gives them their weights", { exact: false })).toBeVisible();
-  await expect(page.getByRole("row", { name: /Daily momentum portfolio/ })).toContainText("CalendarEventSignal");
+  await expect(page.getByText("The account owner's application creates them and publishes the signals' weights", { exact: false })).toBeVisible();
+  const momentum = page.getByRole("row", { name: /Daily momentum portfolio/ });
+  await expect(momentum).toContainText("CalendarEventSignal");
+  await expect(momentum).toContainText("Paper account (paper)");
+  await expect(momentum).toContainText("Momentum · momentum");
   // Creating a portfolio and giving it weights are the application's; the page offers neither.
   await expect(page.getByRole("button", { name: "Create portfolio" })).toHaveCount(0);
   await expect(page.locator("form.workflow-form")).toHaveCount(0);
@@ -688,9 +937,52 @@ test("runs and deletes portfolios built from provided weights and never creates 
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(row).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Deleted Quarterly value portfolio. The portfolio is retired; its published values were retained." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Deleted Quarterly value portfolio. The portfolio is retired and its own bars configuration deleted; its published values were retained." })).toBeVisible();
   await expect(page.getByRole("row", { name: /Daily momentum portfolio/ })).toBeVisible();
   expect(writes).toEqual([]);
+});
+
+test("filters portfolios by account and signal", async ({ page }) => {
+  const listQueries: URLSearchParams[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname === "/v1/portfolio-configurations") listQueries.push(url.searchParams);
+  });
+
+  await page.goto("/portfolios");
+  await expect(page.getByRole("row", { name: /Daily momentum portfolio/ })).toBeVisible();
+  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await page.getByRole("option", { name: "Shared income account (paper)" }).click();
+  await expect(page.getByRole("row", { name: /Shared income portfolio/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Daily momentum portfolio/ })).toHaveCount(0);
+  expect(listQueries.at(-1)?.get("account_uid")).toBe("account-shared");
+
+  // The signal filter offers the selected account's signals only.
+  await page.getByRole("button", { name: "Signal", exact: true }).click();
+  await expect(page.getByRole("option", { name: /Income/ })).toBeVisible();
+  await expect(page.getByRole("option", { name: /Momentum/ })).toHaveCount(0);
+  await page.getByRole("option", { name: /Income/ }).click();
+  await expect(page.getByRole("row", { name: /Shared income portfolio/ })).toBeVisible();
+  expect(listQueries.at(-1)?.get("signal_definition_uid")).toBe("signal-def-income");
+});
+
+test("shows a portfolio not yet adopted without letting it run", async ({ page }) => {
+  const runs: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/actions/run")) runs.push(request.url());
+  });
+
+  await page.goto("/portfolios");
+  const row = page.getByRole("row", { name: /Legacy growth portfolio/ });
+  await expect(row).toContainText("Not adopted");
+  await expect(row.getByRole("button", { name: "Run now", exact: true })).toBeDisabled();
+  await row.getByText("Legacy growth portfolio", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Legacy growth portfolio" })).toBeVisible();
+  await expect(page.getByText("created before accounts owned portfolios and has no account yet", { exact: false })).toBeVisible();
+  const valuation = page.locator("details").filter({ hasText: "Valuation source" });
+  await valuation.locator("summary").click();
+  await expect(valuation.getByText(/ · a feed it named before adoption$/)).toBeVisible();
+  expect(runs).toEqual([]);
 });
 
 test("tells a person who does not own a portfolio that only its owner can pause or delete it", async ({ page }) => {
@@ -720,6 +1012,93 @@ test("tells a person who does not own a portfolio that only its owner can pause 
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(row).toBeVisible();
   expect(refusals).toEqual(["PATCH", "DELETE"]);
+});
+
+test("lists each account's signals and opens one with its latest weights and portfolios", async ({ page }) => {
+  const reads: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "GET" && (url.pathname.startsWith("/v1/signal-definitions/") || url.pathname === "/v1/portfolio-configurations")) {
+      reads.push(`${url.pathname}${url.search}`);
+    }
+  });
+
+  await page.goto("/signals");
+  await expect(page.getByRole("heading", { level: 1, name: "Signals" })).toBeVisible();
+  // The application creates signals and publishes their weights; the page offers neither.
+  await expect(page.getByRole("button", { name: /Create/ })).toHaveCount(0);
+  const momentum = page.getByRole("row", { name: /Momentum/ });
+  await expect(momentum).toContainText("momentum");
+  await expect(momentum).toContainText("Paper account (paper)");
+  await expect(momentum).toContainText("1 portfolio");
+  await expect(page.getByRole("row", { name: /Income/ })).toContainText("Shared income account (paper)");
+
+  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await page.getByRole("option", { name: "Shared income account (paper)" }).click();
+  await expect(page.getByRole("row", { name: /Income/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Momentum/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await page.getByRole("option", { name: "All accounts" }).click();
+
+  await page.getByRole("row", { name: /Momentum/ }).getByText("Momentum", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Momentum", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Latest weights" })).toBeVisible();
+  const aapl = page.getByRole("row", { name: /AAPL/ });
+  await expect(aapl).toContainText("55.00%");
+  await expect(aapl).toContainText("60.00%");
+  await expect(page.getByRole("row", { name: /MSFT/ })).toContainText("45.00%");
+  await expect(page.getByRole("row", { name: /Daily momentum portfolio/ })).toBeVisible();
+  await expect(page.getByText("weights-portfolio-config-existing", { exact: true })).toHaveCount(0);
+  expect(reads).toEqual(expect.arrayContaining([
+    "/v1/signal-definitions/signal-def-momentum",
+    "/v1/signal-definitions/signal-def-momentum/weights?limit=5",
+    "/v1/portfolio-configurations?limit=100&offset=0&ordering=name&signal_definition_uid=signal-def-momentum",
+  ]));
+});
+
+test("renames a signal and deletes only one no portfolio follows", async ({ page }) => {
+  const writes: Array<{ method: string; path: string; body: unknown }> = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith("/v1/signal-definitions") && ["PATCH", "DELETE"].includes(request.method())) {
+      writes.push({ method: request.method(), path: url.pathname, body: request.postDataJSON() });
+    }
+  });
+
+  await page.goto("/signals");
+  await expect(page.getByRole("row", { name: /Momentum/ }).getByRole("button", { name: "Delete" })).toBeDisabled();
+
+  const unused = page.getByRole("row", { name: /Unused signal/ });
+  await expect(unused).toContainText("No portfolio");
+  await unused.getByRole("button", { name: "Rename" }).click();
+  const form = page.locator("form.workflow-form");
+  await expect(form.getByLabel("Application key")).toHaveValue("unused");
+  await expect(form.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  await form.getByLabel("Name").fill("Spare signal");
+  await form.getByLabel("Description").fill("Kept for later.");
+  await form.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("heading", { name: "Updated Spare signal." })).toBeVisible();
+
+  const spare = page.getByRole("row", { name: /Spare signal/ });
+  await spare.getByRole("button", { name: "Delete" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete signal" });
+  await expect(dialog).toContainText("only while no portfolio follows it");
+  await dialog.getByLabel("Confirmation word").fill("DELETE");
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Deleted Spare signal and its weights." })).toBeVisible();
+  await expect(spare).toHaveCount(0);
+  expect(writes).toEqual([
+    { method: "PATCH", path: "/v1/signal-definitions/signal-def-unused", body: { name: "Spare signal", description: "Kept for later." } },
+    { method: "DELETE", path: "/v1/signal-definitions/signal-def-unused", body: null },
+  ]);
+
+  // Another owner's signal: the API refuses, and the page says so.
+  await page.getByRole("row", { name: /Income/ }).getByRole("button", { name: "Rename" }).click();
+  await form.getByLabel("Name").fill("Renamed income");
+  await form.getByRole("button", { name: "Save changes" }).click();
+  const error = page.getByRole("dialog", { name: "Signal request failed" });
+  await expect(error).toContainText("This Alpaca account is registered to another owner.");
+  await error.getByRole("button", { name: "Dismiss" }).click();
 });
 
 test("creates and edits a calendar-event rebalance configuration from its own portfolio application", async ({ page }) => {

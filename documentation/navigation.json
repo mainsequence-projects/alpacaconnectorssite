@@ -27,6 +27,11 @@
           "items": []
         },
         {
+          "label": "Signals",
+          "doc": "surfaces/signals",
+          "items": []
+        },
+        {
           "label": "Portfolios",
           "doc": "surfaces/portfolios",
           "items": []

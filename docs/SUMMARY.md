@@ -7,6 +7,7 @@ This map and the Docusaurus sidebar are generated from `documentation/navigation
   - [Assets](surfaces/assets.md)
   - [Accounts](surfaces/accounts.md)
   - [Bars](surfaces/bars.md)
+  - [Signals](surfaces/signals.md)
   - [Portfolios](surfaces/portfolios.md)
 - [Technical documentation](technical/index.md)
   - [Frontend implementation plan](technical/frontend-implementation-plan.md)

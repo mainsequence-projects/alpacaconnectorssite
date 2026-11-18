@@ -18,6 +18,7 @@ import {
   ResourceStatusCell,
   type ResourcePickerOption,
   type ResourceRowAction,
+  type ResourceSelectFilterDefinition,
 } from "@dev-mainsequence/command-center-sdk/views";
 import { ChartCandlestick, Info } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -25,14 +26,18 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   API_ENDPOINTS,
   createApiClient,
-  type AccountSummary,
+  type Account,
   type ApiTransport,
   type BarConfiguration,
   type BarConfigurationAssetSource,
-  type BarConfigurationWriteRequest,
+  type BarFeedAssetSource,
+  type BarFeedWriteRequest,
+  type PortfolioBarsUpdateRequest,
+  type PortfolioConfiguration,
   type ProjectConfigurationResponse,
   type ResourceCollection,
 } from "./api";
+import { accountLabel, accountName, shortUid, useAccountLookup, usePortfolioLookup } from "./lookups";
 import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
 
 type MutationState =
@@ -41,7 +46,8 @@ type MutationState =
   | { state: "error"; message: string }
   | { state: "success"; message: string };
 
-const ASSET_SOURCE_OPTIONS: readonly ResourcePickerOption[] = [
+/** A bars feed prices explicit assets or its account's holdings (connector ADR 0028). */
+const FEED_ASSET_SOURCE_OPTIONS: readonly ResourcePickerOption[] = [
   {
     value: "account_holdings",
     label: "Latest account holdings",
@@ -52,12 +58,14 @@ const ASSET_SOURCE_OPTIONS: readonly ResourcePickerOption[] = [
     label: "Explicit assets",
     subtitle: "Use an explicit set of registered Main Sequence Asset UIDs.",
   },
-  {
-    value: "portfolios",
-    label: "Portfolio assets",
-    subtitle: "Use every asset of the live portfolios that use these prices when the bars update runs.",
-  },
 ];
+
+/** The list's "Belongs to" filter, sent as the API's `portfolio_owned`. */
+const PARENT_FILTER_OPTIONS = [
+  { value: "", label: "Feeds and portfolios" },
+  { value: "false", label: "Bars feeds of accounts" },
+  { value: "true", label: "Portfolios' own" },
+] as const;
 
 function formatError(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") return "Request cancelled.";
@@ -88,32 +96,54 @@ function createResourceHttpClient(transport: ApiTransport): ResourceHttpClient {
   };
 }
 
-function formatAssetSource(source: BarConfigurationAssetSource): string {
+function isPortfolioOwned(configuration: BarConfiguration): boolean {
+  return configuration.portfolio_configuration_uid !== null;
+}
+
+/**
+ * A feed of the former model that prices the portfolios naming it. Only portfolios not yet adopted
+ * name one; the API refuses to change it, and the adopt rollout deletes it (connector ADR 0028).
+ */
+function isLegacyPortfoliosFeed(configuration: BarConfiguration): boolean {
+  return !isPortfolioOwned(configuration) && configuration.asset_source === "portfolios";
+}
+
+function formatAssetSource(configuration: BarConfiguration): string {
   const labels: Record<BarConfigurationAssetSource, string> = {
     assets: "Explicit assets",
     account_holdings: "Latest account holdings",
-    portfolios: "Portfolio assets",
+    portfolios: isPortfolioOwned(configuration)
+      ? "Its portfolio's assets"
+      : "Assets of the portfolios that name it",
   };
   // A source this site does not know yet still shows as the API names it.
-  return labels[source] ?? source;
+  return labels[configuration.asset_source] ?? configuration.asset_source;
 }
 
-function buildBarConfigurationResource(transport: ApiTransport) {
+/** The portfolio a portfolio's own configuration belongs to; a feed has none. */
+function portfolioName(
+  configuration: BarConfiguration,
+  portfolios: ReadonlyMap<string, PortfolioConfiguration>,
+): string {
+  const portfolioUid = configuration.portfolio_configuration_uid;
+  return portfolioUid ? portfolios.get(portfolioUid)?.name ?? shortUid(portfolioUid) : "—";
+}
+
+function buildBarConfigurationResource(
+  transport: ApiTransport,
+  accounts: ReadonlyMap<string, Account>,
+  portfolios: ReadonlyMap<string, PortfolioConfiguration>,
+) {
   const adapter = createHttpResourceAdapter<
     BarConfiguration,
     string,
-    ResourceCollection<BarConfiguration>,
-    BarConfiguration,
-    BarConfigurationWriteRequest,
-    BarConfigurationWriteRequest
+    ResourceCollection<BarConfiguration>
   >({
     client: createResourceHttpClient(transport),
     endpoints: {
       list: API_ENDPOINTS.barConfigurations,
       detail: (uid) => `${API_ENDPOINTS.barConfigurations}/${encodeURIComponent(uid)}`,
       discovery: API_ENDPOINTS.barConfigurationDiscovery,
-      create: API_ENDPOINTS.barConfigurations,
-      update: (uid) => `${API_ENDPOINTS.barConfigurations}/${encodeURIComponent(uid)}`,
     },
     serializeListQuery: ({ pageIndex, pageSize, search, sort, filters }) => ({
       limit: pageSize,
@@ -121,6 +151,7 @@ function buildBarConfigurationResource(transport: ApiTransport) {
       search,
       enabled: filters?.enabled,
       asset_source: filters?.asset_source,
+      portfolio_owned: filters?.portfolio_owned,
       ordering: sort?.[0]
         ? `${sort[0].direction === "descending" ? "-" : ""}${sort[0].key}`
         : "name",
@@ -135,7 +166,7 @@ function buildBarConfigurationResource(transport: ApiTransport) {
     id: "alpaca-bar-configurations",
     label: "Bars configurations",
     itemLabel: "configuration",
-    description: "Stored definitions that select an account, one asset source, and one migrated Alpaca bars profile.",
+    description: "A bars feed belongs to one account; a portfolio's own bars configuration belongs to its portfolio. Each selects the assets one migrated Alpaca bars profile prices into that profile's shared price table.",
     getId: (configuration: BarConfiguration) => configuration.uid,
     adapter,
     columns: [
@@ -152,10 +183,23 @@ function buildBarConfigurationResource(transport: ApiTransport) {
           />
         ),
       },
+      // Its one parent (connector ADR 0028): the account of a feed, or the portfolio of its own.
+      {
+        id: "account-uid",
+        header: "Account",
+        getValue: (configuration) => configuration.account_uid
+          ? accountName(accounts, configuration.account_uid)
+          : "—",
+      },
+      {
+        id: "portfolio-configuration-uid",
+        header: "Portfolio",
+        getValue: (configuration) => portfolioName(configuration, portfolios),
+      },
       {
         id: "asset-source",
         header: "Asset Source",
-        getValue: (configuration) => formatAssetSource(configuration.asset_source),
+        getValue: (configuration) => formatAssetSource(configuration),
       },
       {
         id: "frequency-id",
@@ -181,6 +225,17 @@ function buildBarConfigurationResource(transport: ApiTransport) {
         ),
       },
       {
+        id: "scheduled",
+        header: "Daily Update",
+        getValue: (configuration) => configuration.scheduled,
+        renderCell: (configuration) => (
+          <ResourceStatusCell
+            label={configuration.scheduled ? "Included" : "On demand"}
+            tone={configuration.scheduled ? "success" : "neutral"}
+          />
+        ),
+      },
+      {
         id: "updated-at",
         header: "Updated",
         getValue: (configuration) => configuration.updated_at,
@@ -192,24 +247,53 @@ function buildBarConfigurationResource(transport: ApiTransport) {
 function BarConfigurationList({
   transport,
   refreshKey,
+  accounts,
+  portfolios,
   onEdit,
   onDelete,
 }: {
   transport: ApiTransport;
   refreshKey: number;
+  accounts: ReadonlyMap<string, Account>;
+  portfolios: ReadonlyMap<string, PortfolioConfiguration>;
   onEdit: (configuration: BarConfiguration) => void;
   onDelete: (configuration: BarConfiguration) => void;
 }) {
-  const definition = useMemo(() => buildBarConfigurationResource(transport), [transport]);
+  const definition = useMemo(
+    () => buildBarConfigurationResource(transport, accounts, portfolios),
+    [accounts, portfolios, transport],
+  );
+  const [parentFilter, setParentFilter] = useState("");
+  const filterDefinitions = useMemo<readonly ResourceSelectFilterDefinition[]>(() => [{
+    id: "portfolio_owned",
+    label: "Belongs to",
+    value: parentFilter,
+    options: PARENT_FILTER_OPTIONS,
+    onChange: setParentFilter,
+  }], [parentFilter]);
   const rowActions = useMemo<readonly ResourceRowAction<BarConfiguration>[]>(() => [
-    { id: "edit-bars-configuration", label: "Edit", onSelect: onEdit },
-    { id: "delete-bars-configuration", label: "Delete", tone: "danger", onSelect: onDelete },
+    {
+      id: "edit-bars-configuration",
+      label: "Edit",
+      // The API refuses any change to a feed only portfolios not yet adopted name.
+      disabled: isLegacyPortfoliosFeed,
+      onSelect: onEdit,
+    },
+    {
+      id: "delete-bars-configuration",
+      label: "Delete",
+      tone: "danger",
+      // A portfolio's own configuration is deleted with its portfolio (connector ADR 0028).
+      disabled: isPortfolioOwned,
+      onSelect: onDelete,
+    },
   ], [onDelete, onEdit]);
 
   return (
     <ResourceListPage
       definition={definition}
       embedded
+      filterDefinitions={filterDefinitions}
       pageSize={25}
       refreshable
       refreshKey={refreshKey}
@@ -272,6 +356,7 @@ function profilePickerOption(profile: string): ResourcePickerOption {
   };
 }
 
+
 export function BarsConfigurationsPage({
   transport,
   configuration,
@@ -281,61 +366,51 @@ export function BarsConfigurationsPage({
 }) {
   const api = useMemo(() => createApiClient(transport), [transport]);
   const profiles = configuration.migrated_market_data_profiles;
-  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [dependenciesLoading, setDependenciesLoading] = useState(true);
-  const [dependenciesError, setDependenciesError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const accountLookup = useAccountLookup(transport);
+  const portfolioLookup = usePortfolioLookup(transport);
+  const accounts = accountLookup.items;
   const [editing, setEditing] = useState<BarConfiguration | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [enabled, setEnabled] = useState(true);
+  const [scheduled, setScheduled] = useState(true);
   const [accountUid, setAccountUid] = useState("");
-  const [assetSource, setAssetSource] = useState<BarConfigurationAssetSource>("account_holdings");
+  const [assetSource, setAssetSource] = useState<BarFeedAssetSource>("account_holdings");
   const [assetUids, setAssetUids] = useState("");
   const [profile, setProfile] = useState(profiles[0] ?? "");
   const [mutation, setMutation] = useState<MutationState>({ state: "idle" });
-  const [refreshKey, setRefreshKey] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<BarConfiguration | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deletePending, setDeletePending] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
-    const controller = new AbortController();
-    setDependenciesLoading(true);
-    setDependenciesError(null);
-    api.get<ResourceCollection<AccountSummary>>(
-      `${API_ENDPOINTS.accounts}?limit=100&offset=0&ordering=account_name`,
-      controller.signal,
-    )
-      .then((accountResponse) => {
-        setAccounts(accountResponse.items);
-        setAccountUid((current) => current || accountResponse.items[0]?.uid || "");
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) setDependenciesError(formatError(error));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setDependenciesLoading(false);
-      });
-    return () => controller.abort();
-  }, [api]);
+    setAccountUid((current) => current || accounts[0]?.uid || "");
+  }, [accounts]);
 
   useEffect(() => {
     if (!profile && profiles[0]) setProfile(profiles[0]);
   }, [profile, profiles]);
 
+  // A portfolio's own configuration takes its account and assets from its portfolio.
+  const editingPortfolioOwned = editing !== null && isPortfolioOwned(editing);
+  const editingPortfolioName = editing?.portfolio_configuration_uid
+    ? portfolioLookup.byUid.get(editing.portfolio_configuration_uid)?.name
+      ?? shortUid(editing.portfolio_configuration_uid)
+    : null;
   const profileOptions: readonly ResourcePickerOption[] = Array.from(new Set([
     ...profiles,
     ...(profile ? [profile] : []),
   ])).map(profilePickerOption);
   const busy = mutation.state === "loading";
-  const sourceIsValid = assetSource === "account_holdings"
-    || assetSource === "portfolios"
+  const sourceIsValid = editingPortfolioOwned
+    || assetSource === "account_holdings"
     || (assetSource === "assets" && normalizeUidList(assetUids).length > 0);
   const canSubmit = !busy
-    && !dependenciesLoading
+    && (editingPortfolioOwned || !accountLookup.loading)
     && Boolean(name.trim())
-    && Boolean(accountUid)
+    && (editingPortfolioOwned || Boolean(accountUid))
     && Boolean(profileParts(profile))
     && sourceIsValid;
 
@@ -344,6 +419,7 @@ export function BarsConfigurationsPage({
     setName("");
     setDescription("");
     setEnabled(true);
+    setScheduled(true);
     setAccountUid(accounts[0]?.uid ?? "");
     setAssetSource("account_holdings");
     setAssetUids("");
@@ -351,12 +427,14 @@ export function BarsConfigurationsPage({
   }
 
   function beginEdit(configurationToEdit: BarConfiguration) {
+    if (isLegacyPortfoliosFeed(configurationToEdit)) return;
     setEditing(configurationToEdit);
     setName(configurationToEdit.name);
     setDescription(configurationToEdit.description ?? "");
     setEnabled(configurationToEdit.enabled);
-    setAccountUid(configurationToEdit.account_uid);
-    setAssetSource(configurationToEdit.asset_source);
+    setScheduled(configurationToEdit.scheduled);
+    setAccountUid(configurationToEdit.account_uid ?? "");
+    setAssetSource(configurationToEdit.asset_source === "assets" ? "assets" : "account_holdings");
     setAssetUids(configurationToEdit.asset_uids.join("\n"));
     setProfile(`${configurationToEdit.frequency_id}/${configurationToEdit.feed}/${configurationToEdit.adjustment}`);
     setMutation({ state: "idle" });
@@ -375,18 +453,24 @@ export function BarsConfigurationsPage({
       return;
     }
     const [frequencyId, feed, adjustment] = selectedProfile;
-    const request: BarConfigurationWriteRequest = {
+    const common = {
       name: name.trim(),
       description: description.trim() || null,
       enabled,
-      account_uid: accountUid,
-      asset_source: assetSource,
-      asset_uids: assetSource === "assets" ? normalizeUidList(assetUids) : [],
+      scheduled,
       frequency_id: frequencyId,
       feed,
       adjustment,
     };
-    const actionLabel = editing ? "Updating bars configuration" : "Creating bars configuration";
+    const request: BarFeedWriteRequest | PortfolioBarsUpdateRequest = editingPortfolioOwned
+      ? common
+      : {
+        ...common,
+        account_uid: accountUid,
+        asset_source: assetSource,
+        asset_uids: assetSource === "assets" ? normalizeUidList(assetUids) : [],
+      };
+    const actionLabel = editing ? "Updating bars configuration" : "Creating bars feed";
     setMutation({ state: "loading", label: actionLabel });
     try {
       if (editing) {
@@ -408,6 +492,7 @@ export function BarsConfigurationsPage({
   }
 
   function requestDelete(configurationToDelete: BarConfiguration) {
+    if (isPortfolioOwned(configurationToDelete)) return;
     setDeleteTarget(configurationToDelete);
     setDeleteConfirmation("");
     setDeleteError(null);
@@ -434,16 +519,20 @@ export function BarsConfigurationsPage({
     }
   }
 
+  const formTitle = editingPortfolioOwned
+    ? "Edit a portfolio's bars configuration"
+    : editing ? "Edit bars feed" : "Create bars feed";
+
   return (
     <ApplicationPage as="main" maxWidth="full">
       <ApplicationPageStack>
         <ApplicationPageHeader
           eyebrow="Market Data"
           title="Bars configurations"
-          description="Create and maintain the stored definitions used to resolve and run Alpaca stock-bar updates."
+          description="Create and maintain the bars feeds of your accounts, and adjust the bars configuration each portfolio owns. Every migrated bars profile writes one shared price table; a configuration only chooses which assets it prices, with its account's keys."
         />
 
-        <ApplicationCard header={<h2>{editing ? "Edit bars configuration" : "Create bars configuration"}</h2>}>
+        <ApplicationCard header={<h2>{formTitle}</h2>}>
           <form className="workflow-form" onSubmit={submit}>
             <div className="form-grid">
               <label className="field">Name
@@ -454,43 +543,57 @@ export function BarsConfigurationsPage({
                   disabled={busy}
                 />
               </label>
-              <label className="field">Registered Alpaca account
-                <select
-                  value={accountUid}
-                  onChange={(event) => setAccountUid(event.target.value)}
-                  disabled={busy || dependenciesLoading}
-                >
-                  <option value="">{accounts.length ? "Select an account" : "No registered accounts"}</option>
-                  {accounts.map((account) => (
-                    <option key={account.uid} value={account.uid}>
-                      {account.account_name} ({account.is_paper ? "paper" : "live"})
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {editingPortfolioOwned ? (
+                <label className="field">Belongs to
+                  <input readOnly value={`Portfolio · ${editingPortfolioName ?? ""}`} />
+                  <span>Its runs use the portfolio&apos;s account&apos;s keys.</span>
+                </label>
+              ) : (
+                <label className="field">Registered Alpaca account
+                  <select
+                    value={accountUid}
+                    onChange={(event) => setAccountUid(event.target.value)}
+                    disabled={busy || accountLookup.loading}
+                  >
+                    <option value="">{accounts.length ? "Select an account" : "No registered accounts"}</option>
+                    {accounts.map((account) => (
+                      <option key={account.uid} value={account.uid}>
+                        {accountLabel(account)}
+                      </option>
+                    ))}
+                  </select>
+                  <span>The feed belongs to this account and is deleted with it.</span>
+                </label>
+              )}
               <label className="field field--wide">Description <span>Optional</span>
                 <textarea
                   rows={2}
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
-                  placeholder="What this reusable bars configuration updates"
+                  placeholder="What this bars configuration updates"
                   disabled={busy}
                 />
               </label>
-              <div className="field resource-picker-field">
-                <label id="bars-asset-source-label">Asset source</label>
-                <ResourcePicker
-                  ariaLabelledBy="bars-asset-source-label"
-                  disabled={busy}
-                  emptyMessage="No asset sources are available."
-                  fullWidth
-                  mode="single"
-                  onValueChange={(value) => setAssetSource(value as BarConfigurationAssetSource)}
-                  options={ASSET_SOURCE_OPTIONS}
-                  placeholder="Select an asset source"
-                  value={assetSource}
-                />
-              </div>
+              {editingPortfolioOwned ? (
+                <label className="field">Asset source
+                  <input readOnly value="Every asset its portfolio's signal has published" />
+                </label>
+              ) : (
+                <div className="field resource-picker-field">
+                  <label id="bars-asset-source-label">Asset source</label>
+                  <ResourcePicker
+                    ariaLabelledBy="bars-asset-source-label"
+                    disabled={busy}
+                    emptyMessage="No asset sources are available."
+                    fullWidth
+                    mode="single"
+                    onValueChange={(value) => setAssetSource(value as BarFeedAssetSource)}
+                    options={FEED_ASSET_SOURCE_OPTIONS}
+                    placeholder="Select an asset source"
+                    value={assetSource}
+                  />
+                </div>
+              )}
               <div className="field resource-picker-field">
                 <label id="bars-profile-label">Migrated Bars profile</label>
                 <ResourcePicker
@@ -505,7 +608,7 @@ export function BarsConfigurationsPage({
                   value={profile || null}
                 />
               </div>
-              {assetSource === "assets" ? (
+              {!editingPortfolioOwned && assetSource === "assets" ? (
                 <label className="field field--wide">Registered Asset UIDs <span>Comma, space, or line separated</span>
                   <textarea
                     rows={4}
@@ -526,13 +629,24 @@ export function BarsConfigurationsPage({
               />
               Enabled
             </label>
-            {dependenciesError ? <p className="form-error" role="alert">{dependenciesError}</p> : null}
-            {!dependenciesLoading && accounts.length === 0 ? (
-              <p className="form-error" role="alert">Register an Alpaca account before creating a bars configuration.</p>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={scheduled}
+                onChange={(event) => setScheduled(event.target.checked)}
+                disabled={busy}
+              />
+              Include in the daily bars update
+            </label>
+            {accountLookup.error && !editingPortfolioOwned ? (
+              <p className="form-error" role="alert">{accountLookup.error}</p>
+            ) : null}
+            {!accountLookup.loading && accounts.length === 0 && !editing ? (
+              <p className="form-error" role="alert">Register an Alpaca account before creating a bars feed.</p>
             ) : null}
             <div className="form-actions">
               <button className="button button--primary" type="submit" disabled={!canSubmit}>
-                {editing ? "Save changes" : "Create configuration"}
+                {editing ? "Save changes" : "Create feed"}
               </button>
               {editing ? (
                 <button className="button button--secondary" type="button" onClick={resetForm} disabled={busy}>
@@ -542,17 +656,17 @@ export function BarsConfigurationsPage({
             </div>
             <div className="workflow-guidance">
               <Info aria-hidden="true" size={18} />
-              {assetSource === "portfolios" ? (
+              {editingPortfolioOwned ? (
                 <p>
-                  This stores configuration only. <strong>Portfolio assets</strong> resolves, when the bars update runs, every asset of the live portfolios that use this configuration&apos;s prices. The selected profile must already be migrated.
+                  This is its portfolio&apos;s own bars configuration. It prices every asset the portfolio&apos;s signal has published, with the portfolio&apos;s account&apos;s keys, into the shared table of its bars profile. It is created and deleted with its portfolio, and only the portfolio&apos;s owner changes it. The selected profile must already be migrated.
                 </p>
               ) : assetSource === "assets" ? (
                 <p>
-                  This stores configuration only. <strong>Explicit assets</strong> uses exactly the registered Main Sequence Asset UIDs entered above. The selected profile must already be migrated.
+                  This stores configuration only. <strong>Explicit assets</strong> uses exactly the registered Main Sequence Asset UIDs entered above. Only the account&apos;s owner creates or changes its feeds. The selected profile must already be migrated.
                 </p>
               ) : (
                 <p>
-                  This stores configuration only. <strong>Latest account holdings</strong> resolves the newest persisted snapshot from the trailing 30 days and never captures holdings as a side effect. The selected profile must already be migrated.
+                  This stores configuration only. <strong>Latest account holdings</strong> resolves the newest persisted snapshot from the trailing 30 days and never captures holdings as a side effect. Only the account&apos;s owner creates or changes its feeds. The selected profile must already be migrated.
                 </p>
               )}
             </div>
@@ -584,6 +698,8 @@ export function BarsConfigurationsPage({
         <BarConfigurationList
           transport={transport}
           refreshKey={refreshKey}
+          accounts={accountLookup.byUid}
+          portfolios={portfolioLookup.byUid}
           onEdit={beginEdit}
           onDelete={requestDelete}
         />
@@ -592,10 +708,10 @@ export function BarsConfigurationsPage({
       <ResourceActionConfirmationDialog
         open={deleteTarget !== null}
         actionLabel="Delete"
-        title="Delete bars configuration"
+        title="Delete bars feed"
         selectionLabel={deleteTarget?.name ?? "configuration"}
-        description="Delete this stored configuration. Published bars data is not deleted."
-        warning="This configuration will no longer be available for future market-data updates."
+        description="Delete this bars feed of its account. The bars it published stay in the shared price table."
+        warning="The feed will no longer be available for future market-data updates. A portfolio's own bars configuration is deleted only with its portfolio."
         confirmationWord="DELETE"
         confirmationValue={deleteConfirmation}
         onConfirmationValueChange={setDeleteConfirmation}

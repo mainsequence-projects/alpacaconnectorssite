@@ -40,12 +40,12 @@ Application documentation:
 : Ship user and technical documentation at `/docs/` in the same `dist/` artifact.
 
 Application-owned routes:
-: Assets, Accounts, Bars, Rebalance Configurations, and Portfolios. The two portfolio routes are
-  sibling destinations under the **Portfolios** sub-application group. The root resolves to Assets. Project-wide capability and configuration
+: Assets, Accounts, Bars, Signals, Rebalance Configurations, and Portfolios. The three portfolio
+  routes are sibling destinations under the **Portfolios** sub-application group. The root resolves to Assets. Project-wide capability and configuration
   reference belongs in the same-artifact documentation, not in an Overview application route.
 
 Resource collections and details:
-: The Accounts, Bars, Rebalance Configurations, and Portfolios routes embed SDK
+: The Accounts, Bars, Signals, Rebalance Configurations, and Portfolios routes embed SDK
   `ResourceListPage` collections backed by their canonical
   list and discovery endpoints. Other future resource pages must use their authoritative collection,
   pagination, discovery, and detail contracts. Do not manufacture adapters from capability
@@ -129,9 +129,9 @@ checks pass at phone, tablet, and desktop widths.
 ### Phase 5 — bars-configuration CRUD
 
 1. Adapt `/v1/market-data/bar-configurations` and its discovery contract with the SDK HTTP resource adapter.
-2. Create and edit configurations with a registered Alpaca account, exactly one of the connector's
-   asset sources (explicit assets, latest account holdings, or the assets of the live portfolios
-   that use the prices), and one already-migrated `frequency/feed/adjustment` profile.
+2. Create and edit bars feeds with a registered Alpaca account, explicit assets or the account's
+   latest holdings, and one already-migrated `frequency/feed/adjustment` profile (Phase 8 adds
+   each portfolio's own configuration).
 3. List the stored configurations with server search, filtering, ordering, pagination, and refresh.
 4. Delete through an SDK confirmation dialog without implying that published bars observations are removed.
 
@@ -167,6 +167,22 @@ endpoint.
 
 Exit gate: browser coverage proves inspection, run, pause and resume, delete, and the owner-only
 refusal, and that the portfolio pages send no create or edit request.
+
+### Phase 8 — every portfolio belongs to one account (connector ADR 0028)
+
+1. Accounts: **Remove keys** (one account, and the discovered bulk action) clears only the keys;
+   **Delete** shows the connector's delete preflight and deletes the account and everything it
+   owns with the exact confirmation `confirm=DELETE <account uid>`. Show whether keys are stored,
+   removed, or awaiting migration.
+2. Portfolios: show each portfolio's account and signal, filter by them, show a portfolio not yet
+   adopted and never run it.
+3. Signals: list, inspect with the latest weights and the portfolios that follow it, rename, and
+   delete one no portfolio follows. Never create a signal or publish weights.
+4. Bars: create feeds only; edit a portfolio's own configuration without its account or source,
+   and never delete it.
+
+Exit gate: browser coverage proves each of these against a fixture that mirrors the connector's
+discovery columns, its owner refusals, and its delete preflight.
 
 ## Runtime configuration
 

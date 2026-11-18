@@ -22,6 +22,7 @@ import {
   ResourceStatusCell,
   type ResourcePickerOption,
   type ResourceRowAction,
+  type ResourceSelectFilterDefinition,
 } from "@dev-mainsequence/command-center-sdk/views";
 import {
   getThemeCategoricalColor,
@@ -39,6 +40,7 @@ import {
   createApiClient,
   formatSharedJobSchedule,
   US_EQUITY_REBALANCE_CALENDAR,
+  type Account,
   type ApiTransport,
   type PortfolioConfiguration,
   type PortfolioConfigurationDetail,
@@ -51,7 +53,16 @@ import {
   type PortfolioRebalanceEvent,
   type PortfolioRebalanceStrategy,
   type ResourceCollection,
+  type SignalDefinition,
 } from "./api";
+import {
+  accountLabel,
+  accountName,
+  signalLabel,
+  signalName,
+  useAccountLookup,
+  useSignalDefinitionLookup,
+} from "./lookups";
 import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
 
 type MutationState =
@@ -63,6 +74,8 @@ type MutationState =
 type PortfolioSection = "portfolios" | "rebalances";
 
 const PORTFOLIO_OBSERVATION_LIMIT = 2_500;
+/** The API's words for a portfolio created before accounts owned portfolios (connector ADR 0028). */
+const NOT_ADOPTED_EXPLANATION = "This portfolio was created before accounts owned portfolios and has no account yet. It does not run or take weights until the operator's portfolio adopt rollout gives it its account, or ends it.";
 const REBALANCE_STRATEGY_LABEL = "CalendarEventSignal";
 const WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 /** NYSE regular sessions fall on Monday through Friday only. */
@@ -324,7 +337,11 @@ function createResourceHttpClient(transport: ApiTransport): ResourceHttpClient {
   };
 }
 
-function buildPortfolioResource(transport: ApiTransport) {
+function buildPortfolioResource(
+  transport: ApiTransport,
+  accounts: ReadonlyMap<string, Account>,
+  definitions: ReadonlyMap<string, SignalDefinition>,
+) {
   const adapter = createHttpResourceAdapter<
     PortfolioConfiguration,
     string,
@@ -340,7 +357,8 @@ function buildPortfolioResource(transport: ApiTransport) {
       limit: pageSize,
       offset: pageIndex * pageSize,
       search,
-      bars_configuration_uid: filters?.bars_configuration_uid,
+      account_uid: filters?.account_uid,
+      signal_definition_uid: filters?.signal_definition_uid,
       ordering: sort?.[0]
         ? `${sort[0].direction === "descending" ? "-" : ""}${sort[0].key}`
         : "name",
@@ -352,7 +370,7 @@ function buildPortfolioResource(transport: ApiTransport) {
     id: "alpaca-portfolio-configurations",
     label: "Portfolios",
     itemLabel: "portfolio",
-    description: "Durable analytical portfolios built from weights an application provides, valued with Alpaca bars and rebalanced by CalendarEventSignal rebalance configurations.",
+    description: "Durable analytical portfolios: each belongs to one account and follows one of its signals, is valued with its own Alpaca bars configuration, and is rebalanced by a CalendarEventSignal rebalance configuration.",
     getId: (configuration: PortfolioConfiguration) => configuration.uid,
     adapter,
     columns: [
@@ -368,6 +386,21 @@ function buildPortfolioResource(transport: ApiTransport) {
             meta={configuration.description ?? undefined}
           />
         ),
+      },
+      {
+        id: "account-uid",
+        header: "Account",
+        getValue: (configuration) => configuration.adopted
+          ? accountName(accounts, configuration.account_uid)
+          : "Not adopted",
+        renderCell: (configuration) => configuration.adopted
+          ? accountName(accounts, configuration.account_uid)
+          : <ResourceStatusCell label="Not adopted" tone="warning" />,
+      },
+      {
+        id: "signal-definition-uid",
+        header: "Signal",
+        getValue: (configuration) => signalName(definitions, configuration.signal_definition_uid),
       },
       {
         id: "rebalance-strategy",
@@ -637,6 +670,8 @@ function PortfolioDetail({
   onChanged: () => void;
 }) {
   const api = useMemo(() => createApiClient(transport), [transport]);
+  const accountLookup = useAccountLookup(transport);
+  const definitionLookup = useSignalDefinitionLookup(transport, 0, configuration.account_uid ?? undefined);
   const [detail, setDetail] = useState<PortfolioConfigurationDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -668,6 +703,15 @@ function PortfolioDetail({
 
   const resolved = detail ?? configuration;
   const canonicalPortfolio = detail?.canonical_portfolio;
+  const accountDisplay = resolved.adopted
+    ? accountName(accountLookup.byUid, resolved.account_uid)
+    : "Not adopted";
+  const definition = resolved.signal_definition_uid
+    ? definitionLookup.byUid.get(resolved.signal_definition_uid) ?? null
+    : null;
+  const signalDisplay = definition
+    ? signalLabel(definition)
+    : signalName(definitionLookup.byUid, resolved.signal_definition_uid);
 
   async function toggleScheduled() {
     const scheduled = !resolved.scheduled;
@@ -735,6 +779,9 @@ function PortfolioDetail({
             },
             badges: [
               { key: "strategy", label: REBALANCE_STRATEGY_LABEL, tone: "default" },
+              ...(resolved.adopted
+                ? []
+                : [{ key: "adoption", label: "Not adopted", tone: "warning" as const }]),
               {
                 key: "materialization",
                 label: canonicalPortfolio?.materialized ? "Materialized" : "Awaiting first run",
@@ -742,6 +789,8 @@ function PortfolioDetail({
               },
             ],
             inline_fields: [
+              { key: "account", label: "Account", value: accountDisplay },
+              { key: "signal", label: "Signal", value: signalDisplay },
               { key: "weights", label: "Weights", value: detail ? "Provided by an application" : "Loading" },
               { key: "bars", label: "Valuation source", value: detail?.linked_bars.name ?? "Loading" },
               { key: "scheduled", label: "Scheduled run", value: resolved.scheduled ? "Included" : "Paused" },
@@ -779,6 +828,12 @@ function PortfolioDetail({
         />
       )}
     >
+      {resolved.adopted ? null : (
+        <aside className="workflow-guidance" aria-label="Portfolio not adopted">
+          <Info aria-hidden="true" size={18} />
+          <p>{NOT_ADOPTED_EXPLANATION}</p>
+        </aside>
+      )}
       {scheduleNotice ? <p className="muted" role="status">{scheduleNotice}</p> : null}
       {scheduleError ? <p className="form-error" role="alert">{scheduleError}</p> : null}
       {detail ? (
@@ -845,7 +900,9 @@ function PortfolioDetail({
                 <section className="portfolio-detail-subpanel">
                   <h3>Weights</h3>
                   <dl className="portfolio-detail-tree">
-                    <div><dt>Weights</dt><dd>Provided by an application</dd></div>
+                    <div><dt>Account</dt><dd>{accountDisplay}</dd></div>
+                    <div><dt>Signal</dt><dd>{signalDisplay}</dd></div>
+                    <div><dt>Weights</dt><dd>Published to the signal by the account owner&apos;s application</dd></div>
                     <div><dt>Assets</dt><dd>{detail.provided_weights?.asset_count ?? "Unavailable"}</dd></div>
                     <div><dt>First weights</dt><dd>{formatDateTime(detail.provided_weights?.first_observation_at ?? null)}</dd></div>
                     <div><dt>Latest weights</dt><dd>{formatDateTime(detail.provided_weights?.last_observation_at ?? null)}</dd></div>
@@ -878,8 +935,9 @@ function PortfolioDetail({
                 <section className="portfolio-detail-subpanel">
                   <h3>Alpaca bars</h3>
                   <dl className="portfolio-detail-tree">
-                    <div><dt>Bars configuration</dt><dd>{detail.linked_bars.name}</dd></div>
+                    <div><dt>Bars configuration</dt><dd>{detail.linked_bars.name}{detail.adopted ? " · the portfolio's own" : " · a feed it named before adoption"}</dd></div>
                     <div><dt>Bars description</dt><dd>{detail.linked_bars.description ?? "No description"}</dd></div>
+                    <div><dt>Daily bars update</dt><dd>{detail.linked_bars.enabled ? (detail.linked_bars.scheduled ? "Included" : "On demand") : "Disabled"}</dd></div>
                     <div><dt>Source account</dt><dd>{detail.linked_bars.account_name} · {formatEnvironment(detail.linked_bars.account_environment)}</dd></div>
                     <div><dt>Asset scope</dt><dd>{detail.linked_bars.asset_source_name}{detail.linked_bars.asset_count === null ? "" : ` · ${detail.linked_bars.asset_count} assets`}</dd></div>
                     <div><dt>Bars profile</dt><dd>{detail.linked_bars.frequency_id} · {detail.linked_bars.feed.toUpperCase()} · {detail.linked_bars.adjustment} adjusted</dd></div>
@@ -949,7 +1007,45 @@ export function PortfoliosPage({
   section?: PortfolioSection;
 }) {
   const api = useMemo(() => createApiClient(transport), [transport]);
-  const portfolioDefinition = useMemo(() => buildPortfolioResource(transport), [transport]);
+  const [accountFilter, setAccountFilter] = useState("");
+  const [signalFilter, setSignalFilter] = useState("");
+  const accountLookup = useAccountLookup(transport);
+  // The filtered account's signals, or every account's: they name the rows the list shows and
+  // are the signal filter's options.
+  const definitionLookup = useSignalDefinitionLookup(transport, 0, accountFilter || undefined);
+  const portfolioDefinition = useMemo(
+    () => buildPortfolioResource(transport, accountLookup.byUid, definitionLookup.byUid),
+    [accountLookup.byUid, definitionLookup.byUid, transport],
+  );
+  const portfolioFilterDefinitions = useMemo<readonly ResourceSelectFilterDefinition[]>(() => [
+    {
+      id: "account_uid",
+      label: "Account",
+      value: accountFilter,
+      options: [
+        { value: "", label: "All accounts" },
+        ...accountLookup.items.map((account) => ({ value: account.uid, label: accountLabel(account) })),
+      ],
+      onChange: (value) => {
+        setAccountFilter(value);
+        setSignalFilter("");
+      },
+    },
+    {
+      id: "signal_definition_uid",
+      label: "Signal",
+      value: signalFilter,
+      options: [
+        { value: "", label: "All signals" },
+        ...definitionLookup.items.map((definition) => ({
+          value: definition.uid,
+          label: signalLabel(definition),
+          meta: accountName(accountLookup.byUid, definition.account_uid),
+        })),
+      ],
+      onChange: setSignalFilter,
+    },
+  ], [accountFilter, accountLookup.byUid, accountLookup.items, definitionLookup.items, signalFilter]);
   const rebalanceDefinition = useMemo(() => buildRebalanceResource(transport), [transport]);
   const manageRebalances = section === "rebalances";
   const [selectedPortfolio, setSelectedPortfolio] = useState<PortfolioConfiguration | null>(null);
@@ -1034,7 +1130,7 @@ export function PortfoliosPage({
     try {
       if (deletePortfolioTarget) {
         await api.delete(`${API_ENDPOINTS.portfolioConfigurations}/${encodeURIComponent(deletePortfolioTarget.uid)}`);
-        setMutation({ state: "success", message: `Deleted ${deletePortfolioTarget.name}. The portfolio is retired; its published values were retained.` });
+        setMutation({ state: "success", message: `Deleted ${deletePortfolioTarget.name}. The portfolio is retired and its own bars configuration deleted; its published values were retained.` });
         setDeletePortfolioTarget(null);
         setPortfolioRefreshKey((current) => current + 1);
       } else if (deleteRebalanceTarget) {
@@ -1052,7 +1148,13 @@ export function PortfoliosPage({
   }
 
   const portfolioRowActions = useMemo<readonly ResourceRowAction<PortfolioConfiguration>[]>(() => [
-    { id: "run-portfolio", label: "Run now", disabled: (item) => item.job?.image_status !== "ready", onSelect: (item) => void runPortfolio(item) },
+    {
+      id: "run-portfolio",
+      label: "Run now",
+      // A portfolio not yet adopted does not run (connector ADR 0028); the API refuses it too.
+      disabled: (item) => !item.adopted || item.job?.image_status !== "ready",
+      onSelect: (item) => void runPortfolio(item),
+    },
     { id: "delete-portfolio", label: "Delete", tone: "danger", onSelect: setDeletePortfolioTarget },
   ], []);
   const rebalancePrimaryActions = useMemo(() => [
@@ -1071,7 +1173,7 @@ export function PortfoliosPage({
           title={manageRebalances ? "Rebalance Configurations" : "Portfolios"}
           description={manageRebalances
             ? "Maintain reusable CalendarEventSignal policies that execute a portfolio's latest weights at selected NYSE session events."
-            : "Portfolios built from weights an application provides; the application creates them and gives them their weights. The shared portfolio Job declared in the connector's workflow runs every portfolio. Inspect and run them here; a portfolio's owner can also pause, resume, or delete it."}
+            : "Each portfolio belongs to one account and follows one of its signals. The account owner's application creates them and publishes the signals' weights; the shared portfolio Job declared in the connector's workflow runs every portfolio. Inspect and run them here; the account's owner can also pause, resume, or delete them."}
         />
 
         {rebalanceFormOpen && manageRebalances ? (
@@ -1184,7 +1286,7 @@ export function PortfoliosPage({
         ) : selectedPortfolio ? (
           <PortfolioDetail configuration={selectedPortfolio} transport={transport} onBack={() => setSelectedPortfolio(null)} onChanged={() => setPortfolioRefreshKey((current) => current + 1)} />
         ) : (
-          <ResourceListPage definition={portfolioDefinition} embedded pageSize={25} onRowActivate={setSelectedPortfolio} refreshable refreshKey={portfolioRefreshKey} rowActions={portfolioRowActions} searchPlaceholder="Search portfolios" />
+          <ResourceListPage definition={portfolioDefinition} embedded filterDefinitions={portfolioFilterDefinitions} pageSize={25} onRowActivate={setSelectedPortfolio} refreshable refreshKey={portfolioRefreshKey} rowActions={portfolioRowActions} searchPlaceholder="Search portfolios" />
         )}
       </ApplicationPageStack>
 
@@ -1193,7 +1295,7 @@ export function PortfoliosPage({
         actionLabel="Delete"
         title={deletePortfolioTarget ? "Delete portfolio" : "Delete rebalance configuration"}
         selectionLabel={deletePortfolioTarget?.name ?? deleteRebalanceTarget?.name ?? "configuration"}
-        description={deletePortfolioTarget ? "Delete this portfolio. It is retired, not erased: it stops running, and its published values and weights remain as its record. Only the portfolio's owner can delete it." : "Delete this reusable Rebalance Configuration."}
+        description={deletePortfolioTarget ? "Delete this portfolio. It is retired, not erased: it stops running, and its published values remain as its record. Its own bars configuration is deleted with it; the signal it follows stays with its signal definition. Only the portfolio's owner can delete it." : "Delete this reusable Rebalance Configuration."}
         warning={deletePortfolioTarget ? "An account whose target still holds this portfolio must drop it first." : "Deletion is blocked while a Portfolio Configuration still references this row."}
         confirmationWord="DELETE"
         confirmationValue={deleteConfirmation}

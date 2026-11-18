@@ -15,12 +15,16 @@ the generated documentation navigation, and type-checks the application.
 directory.
 
 `npm run test:e2e` builds in the explicit test mode and uses a cross-origin host fixture. The
-browser suite checks the navigation's six destinations, that the pages call only the connector
+browser suite checks the navigation's seven destinations, that the pages call only the connector
 routes they use, the direct development transport, asset registration, account review,
-registration, credential rotation, and removal with keys stored encrypted by the API,
-bars-configuration CRUD over the connector's three asset sources, the detail of a portfolio built
-from provided weights, portfolio run and delete with no create or edit form, the owner-only
-refusal (`403`, read as "Only the portfolio's owner can do this."), rebalance create and edit, the
+registration, and credential rotation with keys stored encrypted by the API, removing an account's
+keys (one account and the bulk action) and storing new ones, the account delete preflight with its
+counts, a blocked delete that changes nothing, the delete with its exact confirmation, the account
+owner's refusals, bars-feed CRUD over the two feed sources, a portfolio's own bars configuration
+(no account or source sent, no delete), the detail of a portfolio with its account and signal,
+the account and signal filters, a portfolio not yet adopted that is not run, portfolio run and
+delete with no create or edit form, the owner-only refusal (`403`, read as "Only the portfolio's
+owner can do this."), the Signals list, detail, rename and delete, rebalance create and edit, the
 portfolio scheduled-run toggle (`PATCH {scheduled}`) with the shared Job's schedule shown
 read-only, the iframe handshake, delegated request headers, live theme changes, documentation
 routes, and Command Center layout geometry at phone, tablet, and desktop widths.
@@ -34,8 +38,13 @@ portfolio tests assert that the page sends no create or edit request. The fixtur
 connector's portfolio update and rebalance request models (connector ADR 0009): it rejects unknown
 fields with 422, including the retired `portfolio_prices_frequency` and `forward_fill_to_now` and
 any strategy other than `calendar_event_signal`, applies the connector's defaults, and serves the
-API's rebalance discovery columns. Like the connector, it creates no portfolio, and it refuses a
-change to a portfolio of another owner with `403 portfolio_owned_by_another`.
+API's discovery columns and filters. It mirrors the account-owned model of connector ADR 0028: two
+accounts, the second another owner's (`409 account_owned_by_another`); signal definitions; one
+bars configuration per portfolio; a portfolio not yet adopted (`409 portfolio_not_adopted` on run);
+the account delete preflight and its exact confirmation, with blockers that tests set through the
+mock-only `POST /__account-delete-blockers`; and the connector's signal and portfolio create
+routes, which only tests call, to give a new account something to delete. It refuses a change to a
+portfolio of another owner with `403 portfolio_owned_by_another`.
 
 The authentication tests check both transports against the fixture's request log: every request
 from the embedded application carries the delegated `Authorization: Bearer` and
