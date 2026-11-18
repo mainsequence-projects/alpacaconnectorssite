@@ -13,7 +13,7 @@ import {
   ResourcePicker,
   type ResourcePickerOption,
 } from "@dev-mainsequence/command-center-sdk/views";
-import { Activity, BookOpen, BriefcaseBusiness, ChartCandlestick, Info, Landmark, Layers3, PackageSearch, Repeat2 } from "lucide-react";
+import { BookOpen, BriefcaseBusiness, ChartCandlestick, Landmark, PackageSearch, Repeat2 } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -28,8 +28,6 @@ import {
   type AssetRegistrationOperationResponse,
   type AssetRegistrationPlanResponse,
   type AssetRegistrationRequest,
-  type AssetUniverse,
-  type AssetUniverseCreateRequest,
   type ProjectConfigurationResponse,
   type ResourceCollection,
 } from "./api";
@@ -40,10 +38,8 @@ import { AssetResourceList } from "./assetResource";
 import { BarsConfigurationsPage } from "./barConfigurations";
 import { PortfoliosPage } from "./portfolios";
 import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
-import { SignalsPage } from "./signals";
-import { UniverseResourceList } from "./universeResource";
 
-type RouteId = "assets" | "accounts" | "universes" | "bars" | "signals" | "rebalances" | "portfolios";
+type RouteId = "assets" | "accounts" | "bars" | "rebalances" | "portfolios";
 const ASSET_OPERATION_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 type ActionState<T> =
   | { state: "idle" }
@@ -54,9 +50,7 @@ type ActionState<T> =
 const ROUTE_PATHS: Record<RouteId, string> = {
   assets: "/assets",
   accounts: "/accounts",
-  universes: "/universes",
   bars: "/bars",
-  signals: "/signals",
   rebalances: "/rebalance-configurations",
   portfolios: "/portfolios",
 };
@@ -68,7 +62,7 @@ function AlpacaNavigationIcon({ className }: { className?: string }) {
 const NAVIGATION: NavigationApplicationDefinition = {
   id: "alpaca-connectors",
   label: "Alpaca Connectors",
-  description: "Asset registration and ETF holdings universes",
+  description: "Alpaca assets, accounts, market data, and portfolios",
   icon: AlpacaNavigationIcon,
   href: "/assets",
   defaultDestinationId: "assets",
@@ -86,13 +80,6 @@ const NAVIGATION: NavigationApplicationDefinition = {
           description: "Register accounts with their Alpaca API keys",
         },
         {
-          id: "universes",
-          label: "Universes",
-          href: "/universes",
-          icon: Layers3,
-          description: "Create and run ETF holdings universes",
-        },
-        {
           id: "bars",
           label: "Bars",
           href: "/bars",
@@ -106,13 +93,6 @@ const NAVIGATION: NavigationApplicationDefinition = {
       label: "Portfolios",
       destinations: [
         {
-          id: "signals",
-          label: "ETF Weight Signals",
-          href: "/signals",
-          icon: Activity,
-          description: "Schedule Universe-backed ETF signals",
-        },
-        {
           id: "rebalances",
           label: "Rebalance Configurations",
           href: "/rebalance-configurations",
@@ -121,10 +101,10 @@ const NAVIGATION: NavigationApplicationDefinition = {
         },
         {
           id: "portfolios",
-          label: "ETF Portfolios",
+          label: "Portfolios",
           href: "/portfolios",
           icon: BriefcaseBusiness,
-          description: "Build scheduled analytical portfolios",
+          description: "Inspect and run portfolios built from provided weights",
         },
       ],
     },
@@ -146,9 +126,7 @@ const NAVIGATION: NavigationApplicationDefinition = {
 
 function routeFromPath(pathname: string): RouteId {
   if (pathname.startsWith("/accounts")) return "accounts";
-  if (pathname.startsWith("/universes")) return "universes";
   if (pathname.startsWith("/bars")) return "bars";
-  if (pathname.startsWith("/signals")) return "signals";
   if (pathname.startsWith("/rebalance-configurations")) return "rebalances";
   if (pathname.startsWith("/portfolios")) return "portfolios";
   return "assets";
@@ -551,107 +529,6 @@ function AssetsPage({ transport }: { transport: ApiTransport }) {
   );
 }
 
-function UniversesPage({ transport }: { transport: ApiTransport }) {
-  const [name, setName] = useState("");
-  const [symbol, setSymbol] = useState("");
-  const [sourceUrl, setSourceUrl] = useState("");
-  const [action, setAction] = useState<ActionState<AssetUniverse>>({ state: "idle" });
-  const [universeRefreshKey, setUniverseRefreshKey] = useState(0);
-  const api = useMemo(() => createApiClient(transport), [transport]);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!name.trim() || !symbol.trim() || !sourceUrl.trim()) {
-      setAction({ state: "error", message: "Name, ETF ticker, and holdings source URL are required." });
-      return;
-    }
-    const request: AssetUniverseCreateRequest = {
-      name: name.trim(),
-      symbol: symbol.trim().toUpperCase(),
-      source_url: sourceUrl.trim(),
-    };
-    setAction({ state: "loading", label: "Creating universe" });
-    try {
-      const result = await api.post<AssetUniverse>(API_ENDPOINTS.universes, request);
-      setAction({ state: "success", label: "Universe created", result });
-      setName("");
-      setSymbol("");
-      setSourceUrl("");
-      setUniverseRefreshKey((current) => current + 1);
-    } catch (error) {
-      setAction({ state: "error", message: formatError(error) });
-    }
-  }
-
-  return (
-    <ApplicationPage as="main" maxWidth="full">
-      <ApplicationPageStack>
-        <ApplicationPageHeader
-          eyebrow="Universes"
-          title="Create and manage ETF holdings universes"
-          description="Each universe stores an ETF holdings source and materializes its components as linked Asset Category membership."
-        />
-        <ApplicationCard header={<h2>Create universe</h2>}>
-          <form className="workflow-form" onSubmit={submit}>
-            <div className="form-grid">
-              <label className="field">Name
-                <input
-                  type="text"
-                  value={name}
-                  placeholder="iShares Core S&amp;P 500 ETF"
-                  disabled={action.state === "loading"}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </label>
-              <label className="field">ETF ticker
-                <input
-                  type="text"
-                  value={symbol}
-                  placeholder="IVV"
-                  disabled={action.state === "loading"}
-                  onChange={(event) => setSymbol(event.target.value)}
-                />
-              </label>
-              <label className="field field--wide">Holdings source URL
-                <input
-                  type="url"
-                  value={sourceUrl}
-                  placeholder="https://www.ishares.com/us/products/239726/ishares-core-sp-500-etf"
-                  disabled={action.state === "loading"}
-                  onChange={(event) => setSourceUrl(event.target.value)}
-                />
-              </label>
-            </div>
-            <div className="form-actions">
-              <button className="button button--primary" type="submit" disabled={action.state === "loading"}>Create universe</button>
-            </div>
-            <div className="workflow-guidance">
-              <Info aria-hidden="true" size={18} />
-              <p>Creation saves the ETF holdings source and creates the linked empty category. <strong>Extract components</strong> reads current holdings and materializes membership; extracted weights are not stored on the Universe. If missing Alpaca-backed assets must be registered, the account is selected only for that execution and is not stored on the Universe.</p>
-            </div>
-          </form>
-        </ApplicationCard>
-        {action.state === "success" ? (
-          <section className="action-result" aria-live="polite">
-            <div className="section-heading">
-              <h3>{action.label}</h3>
-              <StatusPill tone="success">Complete</StatusPill>
-            </div>
-            <p>Created {action.result.display_name} with Universe UID {action.result.uid}, Source UID {action.result.source_uid}, and Asset Category UID {action.result.asset_category_uid}. It has zero assets until component extraction succeeds.</p>
-          </section>
-        ) : (
-          <ActionResult
-            action={action}
-            errorTitle="Universe request failed"
-            onDismissError={() => setAction({ state: "idle" })}
-          />
-        )}
-        <UniverseResourceList transport={transport} refreshKey={universeRefreshKey} />
-      </ApplicationPageStack>
-    </ApplicationPage>
-  );
-}
-
 export default function App() {
   const transportState = useAlpacaApiTransport();
   // The Alpaca Agent and its Environment, from the API's configuration on page load; never the build.
@@ -680,7 +557,7 @@ export default function App() {
 
   useEffect(() => {
     if (!transportState.transport) return;
-    if (route !== "assets" && route !== "bars" && route !== "signals") {
+    if (route !== "assets" && route !== "bars") {
       setConfigurationLoading(false);
       setConfigurationError(null);
       return;
@@ -762,14 +639,10 @@ export default function App() {
             transport={transportState.transport}
             configuration={configuration}
           />
-        ) : route === "signals" ? (
-          <SignalsPage transport={transportState.transport} />
         ) : route === "rebalances" ? (
           <PortfoliosPage key="rebalances" transport={transportState.transport} section="rebalances" />
-        ) : route === "portfolios" ? (
-          <PortfoliosPage key="portfolios" transport={transportState.transport} />
         ) : (
-          <UniversesPage transport={transportState.transport} />
+          <PortfoliosPage key="portfolios" transport={transportState.transport} />
         )}
       </div>
       <DockedAlpacaAgentRail />

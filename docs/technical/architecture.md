@@ -80,15 +80,16 @@ cannot accidentally route to the Main Sequence Django development backend on por
 
 Endpoint constants and response types live in `src/api.ts`. Transport selection and iframe
 lifecycle live in `src/transport.ts`. The page code orchestrates these contracts but does not
-duplicate registration, holdings extraction, Asset Universe Run behavior, or platform logic. An
-`AssetUniverse.uid` is the action and bars-configuration identity; `source_uid` and
-`asset_category_uid` remain explicit linked identities.
+duplicate registration, portfolio construction, or platform logic. The site reads only the project
+configuration field it uses, `migrated_market_data_profiles`, so fields the connector adds or drops
+do not break it.
 Account registration and credential rotation send the Alpaca API key and secret key once, as
 write-only request fields (`credentials.source = "managed"`). The API validates them with Alpaca and
-stores them as Main Sequence Secrets it owns; account responses carry only the credential source,
-Secret names and UIDs, and the last update time, never values. The values live only in the open
-form's component state and are never placed in a URL, browser storage, persisted view state, or
-console output. The site does not call the Secret-reference endpoint.
+stores them encrypted on the account row (connector ADR 0017); account responses carry only the
+credential source, whether the keys are stored, and the last update time, never values or Secret
+names. The values live only in the open form's component state and are never placed in a URL,
+browser storage, persisted view state, or console output. The API has no Secret-reference
+endpoint and the site lists no Secrets.
 
 Asset registration uses the API's persisted operation contract. The initial `POST` returns `202`
 with an operation UID and ordered step states. The application polls the operation-specific `GET`
@@ -99,10 +100,10 @@ synthetic percentage. Polling stops after the application-owned ten-minute limit
 retrying forever when a worker disappears.
 
 Resource lists and detail pages are added only where the backend exposes authoritative pagination
-and discovery contracts. Accounts, Universes, Bars, ETF Weight Signals, Rebalance Configurations,
-and ETF Portfolios currently satisfy that boundary. The three portfolio-related routes are sibling
-destinations in the **Portfolios** navigation group. Signal and Portfolio routes never ask the
-browser to invent an Environment or pass JobRun business arguments.
+and discovery contracts. Accounts, Bars, Rebalance Configurations, and Portfolios currently
+satisfy that boundary. The two portfolio-related routes are sibling destinations in the
+**Portfolios** navigation group. Portfolio routes never ask the browser to invent an Environment or
+pass JobRun business arguments.
 
 Short create, update, run, and delete requests use one application-owned modal with the SDK
 `ActivityIndicator`, so pending work does not insert a large status region into the page layout.
@@ -111,16 +112,23 @@ and confirmation dialogs retain their own SDK-controlled loading states. Termina
 remain in the owning route and use capability-specific titles such as **Rebalance configuration
 request failed** rather than a broader portfolio label.
 
-The ETF Portfolios page stores only calculation intent in the Portfolio Configuration: references
-to an existing Signal Configuration, Bars Configuration, and Rebalance Configuration plus the
+The connector keeps only portfolios built from weights an application provides (connector
+ADR 0024). Creating one and giving it weights are the application's capabilities, so the Portfolios
+page has no create or edit form: it lists, inspects, and runs portfolios, and offers their owner's
+actions, pause and resume (`PATCH {scheduled}`) and delete, which retires the portfolio. The
+connector never names a portfolio's owner and answers anyone else `403`; the site shows those
+actions on every portfolio and reads a `403` as **Only the portfolio's owner can do this.** A
+portfolio holds only calculation intent: its Bars Configuration and Rebalance Configuration, the
 supported interpolation and valuation parameters (valuation column, maximum price staleness,
 missing-price policy, commission fee), and its `scheduled` flag. Schedule, compute, image, and
 deployment state belong to the shared portfolio Job that the connector declares in its workflow
-file; the signal and portfolio pages show that Job read-only and never write it.
+file; the portfolio pages show that Job read-only and never write it.
+
+Bars configurations take their assets from exactly one of the connector's three sources:
+explicit assets, an account's latest holdings, or the live portfolios that use their prices.
 
 Rebalance Configurations own execution timing (connector ADR 0009): the `calendar_event_signal`
 strategy, calendar, session, market event, signed offset, cadence, and weekly weekday. New
 policies use `US_EQUITY_REBALANCE_CALENDAR` from `src/api.ts`, the NYSE `regular` session. The
-portfolio and rebalance forms build their bodies from the request types in `src/api.ts`, which
-mirror the connector's request models field for field; an edit sends the same whole body as
-`PATCH`.
+rebalance form builds its body from the request type in `src/api.ts`, which mirrors the
+connector's request model field for field; an edit sends the same whole body as `PATCH`.

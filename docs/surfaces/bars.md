@@ -6,8 +6,8 @@ definition; it does not resolve assets, capture holdings, or publish bars.
 Every configuration requires:
 
 - a name and registered Alpaca account;
-- exactly one asset source: latest account holdings, assets from an active Universe, or explicit
-  registered Asset UIDs;
+- exactly one of the connector's three asset sources: latest account holdings, explicit registered
+  Asset UIDs, or the assets of the live portfolios that use the configuration's prices;
 - one migrated `frequency/feed/adjustment` profile; and
 - an enabled or disabled status.
 
@@ -27,10 +27,12 @@ For **Latest account holdings**, resolution uses the newest persisted holdings s
 inclusive trailing 30-day window. It does not capture a fresh snapshot as a side effect. Capture
 holdings separately when a newer snapshot is required.
 
-For **Universe assets**, the form lists active Universes and resolves their materialized Asset
-Category members when the update runs. For **Explicit assets**, enter Main
-Sequence Asset UIDs separated by commas, spaces, or lines. The API validates the selected account,
-universe, assets, and migrated profile when the configuration is saved.
+For **Explicit assets**, enter Main Sequence Asset UIDs separated by commas, spaces, or lines. For
+**Portfolio assets**, the update resolves every asset of the live portfolios that use the
+configuration's prices, the portfolios whose valuation source it is, when it runs; the form takes
+no asset list. The create and edit bodies send exactly the connector's fields, with `asset_uids`
+empty for every source but explicit assets. The API validates the selected account, assets, and
+migrated profile when the configuration is saved.
 
 The table is backed by the canonical collection and discovery endpoints. Use its row actions to
 edit or delete a configuration. Deleting a configuration removes only the stored definition; it

@@ -30,7 +30,6 @@ import {
   type BarConfiguration,
   type BarConfigurationAssetSource,
   type BarConfigurationWriteRequest,
-  type AssetUniverse,
   type ProjectConfigurationResponse,
   type ResourceCollection,
 } from "./api";
@@ -49,14 +48,14 @@ const ASSET_SOURCE_OPTIONS: readonly ResourcePickerOption[] = [
     subtitle: "Use the newest stored account holdings snapshot from the trailing 30 days.",
   },
   {
-    value: "universe",
-    label: "Universe assets",
-    subtitle: "Resolve assets from the selected active Universe when the bars update runs.",
-  },
-  {
     value: "assets",
     label: "Explicit assets",
     subtitle: "Use an explicit set of registered Main Sequence Asset UIDs.",
+  },
+  {
+    value: "portfolios",
+    label: "Portfolio assets",
+    subtitle: "Use every asset of the live portfolios that use these prices when the bars update runs.",
   },
 ];
 
@@ -92,10 +91,11 @@ function createResourceHttpClient(transport: ApiTransport): ResourceHttpClient {
 function formatAssetSource(source: BarConfigurationAssetSource): string {
   const labels: Record<BarConfigurationAssetSource, string> = {
     assets: "Explicit assets",
-    universe: "Universe assets",
     account_holdings: "Latest account holdings",
+    portfolios: "Portfolio assets",
   };
-  return labels[source];
+  // A source this site does not know yet still shows as the API names it.
+  return labels[source] ?? source;
 }
 
 function buildBarConfigurationResource(transport: ApiTransport) {
@@ -282,7 +282,6 @@ export function BarsConfigurationsPage({
   const api = useMemo(() => createApiClient(transport), [transport]);
   const profiles = configuration.migrated_market_data_profiles;
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [universes, setUniverses] = useState<AssetUniverse[]>([]);
   const [dependenciesLoading, setDependenciesLoading] = useState(true);
   const [dependenciesError, setDependenciesError] = useState<string | null>(null);
   const [editing, setEditing] = useState<BarConfiguration | null>(null);
@@ -292,7 +291,6 @@ export function BarsConfigurationsPage({
   const [accountUid, setAccountUid] = useState("");
   const [assetSource, setAssetSource] = useState<BarConfigurationAssetSource>("account_holdings");
   const [assetUids, setAssetUids] = useState("");
-  const [universeUid, setUniverseUid] = useState("");
   const [profile, setProfile] = useState(profiles[0] ?? "");
   const [mutation, setMutation] = useState<MutationState>({ state: "idle" });
   const [refreshKey, setRefreshKey] = useState(0);
@@ -305,19 +303,12 @@ export function BarsConfigurationsPage({
     const controller = new AbortController();
     setDependenciesLoading(true);
     setDependenciesError(null);
-    Promise.all([
-      api.get<ResourceCollection<AccountSummary>>(
-        `${API_ENDPOINTS.accounts}?limit=100&offset=0&ordering=account_name`,
-        controller.signal,
-      ),
-      api.get<ResourceCollection<AssetUniverse>>(
-        `${API_ENDPOINTS.universes}?limit=100&offset=0&ordering=display_name`,
-        controller.signal,
-      ),
-    ])
-      .then(([accountResponse, universeResponse]) => {
+    api.get<ResourceCollection<AccountSummary>>(
+      `${API_ENDPOINTS.accounts}?limit=100&offset=0&ordering=account_name`,
+      controller.signal,
+    )
+      .then((accountResponse) => {
         setAccounts(accountResponse.items);
-        setUniverses(universeResponse.items);
         setAccountUid((current) => current || accountResponse.items[0]?.uid || "");
       })
       .catch((error: unknown) => {
@@ -333,20 +324,13 @@ export function BarsConfigurationsPage({
     if (!profile && profiles[0]) setProfile(profiles[0]);
   }, [profile, profiles]);
 
-  const activeUniverses = universes.filter((universe) => universe.is_active);
-  const activeUniverseOptions: readonly ResourcePickerOption[] = activeUniverses.map((universe) => ({
-    value: universe.uid,
-    label: universe.display_name,
-    subtitle: universe.symbol,
-    meta: universe.uid,
-  }));
   const profileOptions: readonly ResourcePickerOption[] = Array.from(new Set([
     ...profiles,
     ...(profile ? [profile] : []),
   ])).map(profilePickerOption);
   const busy = mutation.state === "loading";
   const sourceIsValid = assetSource === "account_holdings"
-    || (assetSource === "universe" && Boolean(universeUid))
+    || assetSource === "portfolios"
     || (assetSource === "assets" && normalizeUidList(assetUids).length > 0);
   const canSubmit = !busy
     && !dependenciesLoading
@@ -363,7 +347,6 @@ export function BarsConfigurationsPage({
     setAccountUid(accounts[0]?.uid ?? "");
     setAssetSource("account_holdings");
     setAssetUids("");
-    setUniverseUid("");
     setProfile(profiles[0] ?? "");
   }
 
@@ -375,7 +358,6 @@ export function BarsConfigurationsPage({
     setAccountUid(configurationToEdit.account_uid);
     setAssetSource(configurationToEdit.asset_source);
     setAssetUids(configurationToEdit.asset_uids.join("\n"));
-    setUniverseUid(configurationToEdit.universe_uid ?? "");
     setProfile(`${configurationToEdit.frequency_id}/${configurationToEdit.feed}/${configurationToEdit.adjustment}`);
     setMutation({ state: "idle" });
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -400,7 +382,6 @@ export function BarsConfigurationsPage({
       account_uid: accountUid,
       asset_source: assetSource,
       asset_uids: assetSource === "assets" ? normalizeUidList(assetUids) : [],
-      universe_uid: assetSource === "universe" ? universeUid : null,
       frequency_id: frequencyId,
       feed,
       adjustment,
@@ -524,25 +505,6 @@ export function BarsConfigurationsPage({
                   value={profile || null}
                 />
               </div>
-              {assetSource === "universe" ? (
-                <div className="field field--wide resource-picker-field">
-                  <label id="bars-universe-label">Active Universe</label>
-                  <ResourcePicker
-                    ariaLabelledBy="bars-universe-label"
-                    disabled={busy || dependenciesLoading}
-                    emptyMessage="No active Universes."
-                    fullWidth
-                    loading={dependenciesLoading}
-                    mode="single"
-                    onValueChange={setUniverseUid}
-                    options={activeUniverseOptions}
-                    placeholder="Select the Universe whose assets will be updated"
-                    searchable
-                    searchPlaceholder="Search active Universes"
-                    value={universeUid || null}
-                  />
-                </div>
-              ) : null}
               {assetSource === "assets" ? (
                 <label className="field field--wide">Registered Asset UIDs <span>Comma, space, or line separated</span>
                   <textarea
@@ -580,9 +542,9 @@ export function BarsConfigurationsPage({
             </div>
             <div className="workflow-guidance">
               <Info aria-hidden="true" size={18} />
-              {assetSource === "universe" ? (
+              {assetSource === "portfolios" ? (
                 <p>
-                  This stores configuration only. <strong>Universe assets</strong> resolves the selected Universe&apos;s current materialized Asset Category members when the bars update runs. It does not extract or refresh the Universe. The selected profile must already be migrated.
+                  This stores configuration only. <strong>Portfolio assets</strong> resolves, when the bars update runs, every asset of the live portfolios that use this configuration&apos;s prices. The selected profile must already be migrated.
                 </p>
               ) : assetSource === "assets" ? (
                 <p>

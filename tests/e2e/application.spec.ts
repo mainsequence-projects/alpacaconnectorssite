@@ -1,12 +1,5 @@
-import { expect, test, type APIRequestContext, type Locator, type Page, type Request } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page, type Request } from "@playwright/test";
 import { assertCommandCenterPageLayout } from "@dev-mainsequence/command-center-sdk/layout/testing";
-
-async function selectRowAction(page: Page, row: Locator, label: string) {
-  await row.getByRole("button", { name: "Actions", exact: true }).click();
-  const menu = page.getByRole("menu", { name: "Actions", exact: true });
-  await expect(menu).toBeVisible();
-  await menu.getByRole("menuitem", { name: label, exact: true }).click();
-}
 
 test("opens Assets in the SDK navigation shell and conforms at Command Center viewports", async ({ page }) => {
   await page.goto("/");
@@ -29,14 +22,48 @@ test("opens Assets in the SDK navigation shell and conforms at Command Center vi
   await expect(page.getByText("Capabilities", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: /^Assets/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^Accounts/ })).toBeVisible();
-  await expect(page.getByRole("link", { name: /^Universes/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^Bars/ })).toBeVisible();
-  await expect(navigation.getByText("Portfolios", { exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: /^ETF Weight Signals/ })).toBeVisible();
+  await expect(navigation.getByText("Portfolios", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /^Rebalance Configurations/ })).toBeVisible();
-  await expect(page.getByRole("link", { name: /^ETF Portfolios/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /^Portfolios/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /^Documentation/ })).toBeVisible();
+  // Those six destinations and no other.
+  await expect(navigation.getByRole("link")).toHaveCount(6);
   await assertCommandCenterPageLayout(page);
+});
+
+test("calls only the connector routes its pages use", async ({ page }) => {
+  const apiPaths = new Set<string>();
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith("/v1/")) apiPaths.add(url.pathname);
+  });
+
+  for (const [path, row] of [
+    ["/", /AAPL/],
+    ["/accounts", /Paper account/],
+    ["/bars", /Daily paper holdings/],
+    ["/rebalance-configurations", /NYSE close/],
+    ["/portfolios", /Daily momentum portfolio/],
+  ] as const) {
+    await page.goto(path);
+    await expect(page.getByRole("row", { name: row }).first()).toBeVisible();
+  }
+  await page.getByRole("row", { name: /Daily momentum portfolio/ }).getByText("Daily momentum portfolio", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Historical performance" })).toBeVisible();
+
+  const routes = [
+    "/v1/project-state/configuration",
+    "/v1/assets",
+    "/v1/accounts",
+    "/v1/market-data/bar-configurations",
+    "/v1/portfolio-rebalance-configurations",
+    "/v1/portfolio-configurations",
+  ];
+  expect(apiPaths.size).toBeGreaterThan(routes.length);
+  for (const path of apiPaths) {
+    expect(routes.some((route) => path === route || path.startsWith(`${route}/`)), path).toBe(true);
+  }
 });
 
 const E2E_API_ORIGIN = "http://127.0.0.1:4274";
@@ -125,9 +152,8 @@ test("registers an account from Alpaca keys after a preflight review", async ({ 
   await expect(review.getByText("Live", { exact: true })).toBeVisible();
   await expect(review.getByText("22222222-2222-4222-8222-222222222222", { exact: true })).toBeVisible();
   await expect(review.getByText("USD", { exact: true })).toBeVisible();
-  await expect(review.getByText(/^ALPACA_CONNECTORS__ACCOUNT-\d+__ALPACA_LIVE__API_KEY$/)).toBeVisible();
-  await expect(review.getByText(/^ALPACA_CONNECTORS__ACCOUNT-\d+__ALPACA_LIVE__SECRET_KEY$/)).toBeVisible();
-  await expect(review.getByText("Create", { exact: true })).toHaveCount(2);
+  await expect(review.getByText("Key storage", { exact: true })).toBeVisible();
+  await expect(review.getByText(/ALPACA_CONNECTORS__/)).toHaveCount(0);
   await expect(confirmRegistration).toBeEnabled();
   expect(accountWrites).toEqual([
     { method: "POST", path: "/v1/accounts/registration/preflight", body: registrationBody },
@@ -228,22 +254,20 @@ test("edits, rotates, inspects, and removes a managed account", async ({ page, r
   await row.getByText("Rotation desk renamed", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Rotation desk renamed" })).toBeVisible();
   await expect(page.getByText("Stored by this application", { exact: true })).toBeVisible();
-  await expect(page.getByText(`ALPACA_CONNECTORS__${created.unique_identifier}__API_KEY`, { exact: true })).toBeVisible();
-  await expect(page.getByText(`ALPACA_CONNECTORS__${created.unique_identifier}__SECRET_KEY`, { exact: true })).toBeVisible();
+  await expect(page.getByText("Stored encrypted", { exact: true })).toBeVisible();
+  await expect(page.getByText(`ALPACA_CONNECTORS__${created.unique_identifier}__API_KEY`, { exact: true })).toHaveCount(0);
   await expect(page.getByText("Credentials updated", { exact: true })).toBeVisible();
   await expect(page.getByText(ROTATED_API_KEY)).toHaveCount(0);
   await page.getByRole("button", { name: "Back to accounts" }).click();
 
   await row.getByRole("button", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog", { name: "Remove account registration" });
-  await expect(dialog).toContainText("delete its stored credentials");
+  await expect(dialog).toContainText("delete its stored keys");
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(row).toHaveCount(0);
-  await expect(page.getByText(
-    `Deleted stored credential Secrets: ALPACA_CONNECTORS__${created.unique_identifier}__API_KEY`,
-    { exact: false },
-  )).toBeVisible();
+  await expect(page.getByText("Removed Rotation desk renamed.", { exact: false })).toBeVisible();
+  await expect(page.getByText("Deleted stored credential Secrets", { exact: false })).toHaveCount(0);
   expectNoCredentialLeak(requestUrls, [ROTATED_API_KEY, ROTATED_SECRET_KEY]);
 });
 
@@ -303,12 +327,6 @@ test("blocks registration when the review reports unresolved holdings", async ({
         status: "ACTIVE",
         is_paper: true,
         credential_source: "managed",
-        api_key_secret_name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__API_KEY",
-        secret_key_secret_name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__SECRET_KEY",
-        secret_writes: [
-          { name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__API_KEY", action: "update" },
-          { name: "ALPACA_CONNECTORS__PA0000000003__ALPACA_PAPER__SECRET_KEY", action: "update" },
-        ],
         equity: "1000",
         cash: "0",
         would_write_holdings: 1,
@@ -331,7 +349,6 @@ test("blocks registration when the review reports unresolved holdings", async ({
   await expect(review.getByText("Blocked", { exact: true })).toBeVisible();
   await expect(review.getByText("33333333-3333-4333-8333-333333333333", { exact: true })).toBeVisible();
   await expect(review.getByText("None.", { exact: true })).toHaveCount(2);
-  await expect(review.getByText("Update", { exact: true })).toHaveCount(2);
   await expect(registrationForm.getByRole("button", { name: "Register account" })).toBeDisabled();
   await assertCommandCenterPageLayout(page);
   expect(registrationRequests).toHaveLength(0);
@@ -352,9 +369,9 @@ test("loads only the selected account's latest holdings after row activation", a
   await accountRow.getByText("Paper account", { exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "Paper account" })).toBeVisible();
-  await expect(page.getByText("External Main Sequence Secrets", { exact: true })).toBeVisible();
-  await expect(page.getByText("ALPACA_PAPER_API_KEY", { exact: true })).toBeVisible();
-  await expect(page.getByText("ALPACA_PAPER_SECRET_KEY", { exact: true })).toBeVisible();
+  await expect(page.getByText("Imported from Main Sequence Secrets", { exact: true })).toBeVisible();
+  await expect(page.getByText("Stored encrypted", { exact: true })).toBeVisible();
+  await expect(page.getByText("ALPACA_PAPER_API_KEY", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Not recorded", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Latest holdings" })).toBeVisible();
   await expect(page.getByRole("row", { name: /AAPL/ })).toContainText("125");
@@ -436,12 +453,11 @@ test("completes the Alpaca Agent's key requests on the Accounts page", async ({ 
   expectNoCredentialLeak(requestUrls, [LIVE_API_KEY, LIVE_SECRET_KEY, ROTATED_API_KEY, ROTATED_SECRET_KEY]);
 });
 
-test("plans asset registration, creates a universe, and extracts its components", async ({ page }) => {
+test("plans and executes asset registration through the observable operation", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Register Alpaca-backed assets" })).toBeVisible();
   await page.getByRole("button", { name: "Registered Alpaca account" }).click();
   await page.getByRole("option", { name: /Paper account/ }).click();
-  await expect(page.getByLabel("ETF seed")).toHaveCount(0);
   await page.getByLabel("Exact Alpaca symbols", { exact: false }).fill("AAPL, NVDA");
   await page.getByRole("button", { name: "Build plan" }).click();
   const planProgress = page.getByRole("list", { name: "Asset registration progress" });
@@ -462,107 +478,6 @@ test("plans asset registration, creates a universe, and extracts its components"
   const executionProgress = page.getByRole("list", { name: "Asset registration progress" });
   await expect(executionProgress.getByText("Complete", { exact: true })).toHaveCount(8);
   await expect(page.getByRole("heading", { name: "Registration execution" })).toBeVisible();
-
-  await page.getByRole("link", { name: /^Universes/ }).click();
-  await expect(page.getByRole("heading", { name: "Create and manage ETF holdings universes" })).toBeVisible();
-  await expect(page.getByLabel("Name")).toHaveAttribute("placeholder", "iShares Core S&P 500 ETF");
-  await expect(page.getByLabel("ETF ticker")).toHaveAttribute("placeholder", "IVV");
-  await expect(page.getByLabel("Holdings source URL")).toHaveAttribute("placeholder", /ishares-core-sp-500-etf/);
-  await expect(page.getByText("missing components need provider-backed registration", { exact: false })).toBeVisible();
-  await expect(page.getByText("Component provider", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Infer from configuration", { exact: true })).toHaveCount(0);
-  await page.getByLabel("Name").fill("Dow Jones ETF holdings");
-  await page.getByLabel("ETF ticker").fill("DIA");
-  await page.getByLabel("Holdings source URL").fill("https://example.com/dia");
-  await page.getByRole("button", { name: "Create universe" }).click();
-  await expect(page.getByRole("heading", { name: "Universe created" })).toBeVisible();
-  const creationResult = page.getByRole("heading", { name: "Universe created" }).locator("../..");
-  await expect(creationResult).toContainText("Universe UID universe-dia");
-  await expect(creationResult).toContainText("Source UID source-dia");
-  await expect(creationResult).toContainText("Asset Category UID category-dia");
-
-  const diaRow = page.getByRole("row", { name: /Dow Jones ETF holdings/ });
-  await expect(diaRow).toContainText("0");
-  await selectRowAction(page, diaRow, "Extract components");
-  const dialog = page.getByRole("dialog", { name: "Extract universe components" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("This action does not update market-data bars.", { exact: false })).toBeVisible();
-  await dialog.getByRole("button", { name: "Alpaca account for component extraction" }).click();
-  await page.getByRole("option", { name: /Paper account/ }).click();
-  await dialog.getByRole("button", { name: "Extract components", exact: true }).click();
-  await expect(diaRow).toContainText("3");
-});
-
-test("lists registered universes and runs lifecycle actions from the row action menu", async ({ page }) => {
-  const requestedPaths: string[] = [];
-  page.on("request", (request) => requestedPaths.push(new URL(request.url()).pathname));
-  await page.goto("/universes");
-  await expect(page.getByRole("heading", { name: "Registered universes" })).toBeVisible();
-  expect(requestedPaths).not.toContain("/v1/project-state/configuration");
-  await expect(page.getByRole("columnheader", { name: "UID" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Symbol" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Alpaca Account" })).toHaveCount(0);
-  await expect(page.getByRole("columnheader", { name: "Identifier" })).toHaveCount(0);
-
-  const ivvRow = page.getByRole("row", { name: /S&P 500 holdings/ });
-  await expect(ivvRow.getByText("Active", { exact: true })).toBeVisible();
-  await ivvRow.getByRole("button", { name: "Actions", exact: true }).click();
-  let actionMenu = page.getByRole("menu", { name: "Actions", exact: true });
-  await expect(actionMenu).toBeVisible();
-  await expect(actionMenu.getByRole("menuitem", { name: "Extract components", exact: true })).toBeEnabled();
-  await expect(actionMenu.getByRole("menuitem", { name: "Activate", exact: true })).toBeDisabled();
-  await actionMenu.getByRole("menuitem", { name: "Deactivate", exact: true }).click();
-
-  let dialog = page.getByRole("dialog", { name: "Deactivate universes" });
-  await expect(dialog).toBeVisible();
-  await dialog.getByLabel("Confirmation word").fill("DEACTIVATE");
-  await dialog.getByRole("button", { name: "Deactivate", exact: true }).click();
-  await expect(ivvRow.getByText("Inactive", { exact: true })).toBeVisible();
-
-  await ivvRow.getByRole("button", { name: "Actions", exact: true }).click();
-  actionMenu = page.getByRole("menu", { name: "Actions", exact: true });
-  await expect(actionMenu.getByRole("menuitem", { name: "Activate", exact: true })).toBeEnabled();
-  await actionMenu.getByRole("menuitem", { name: "Activate", exact: true }).click();
-  dialog = page.getByRole("dialog", { name: "Activate" });
-  await dialog.getByRole("button", { name: "Activate", exact: true }).click();
-  await expect(ivvRow.getByText("Active", { exact: true })).toBeVisible();
-
-  const qqqRow = page.getByRole("row", { name: /Nasdaq 100 holdings/ });
-  await selectRowAction(page, qqqRow, "Delete");
-  dialog = page.getByRole("dialog", { name: "Delete universes" });
-  await dialog.getByLabel("Confirmation word").fill("DELETE");
-  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(qqqRow).toHaveCount(0);
-});
-
-test("loads a Universe detail and reuses the Assets list only after row activation", async ({ page }) => {
-  const requestedPaths: string[] = [];
-  page.on("request", (request) => requestedPaths.push(new URL(request.url()).pathname));
-
-  await page.goto("/universes");
-  const ivvRow = page.getByRole("row", { name: /S&P 500 holdings/ });
-  await expect(ivvRow).toBeVisible();
-  expect(requestedPaths).not.toContain("/v1/universes/universe-ivv");
-  expect(requestedPaths).not.toContain("/v1/universes/universe-ivv/assets");
-
-  await ivvRow.getByText("S&P 500 holdings", { exact: true }).click();
-
-  await expect(page.getByRole("heading", { name: "S&P 500 holdings" })).toBeVisible();
-  await expect(page.getByText("HOLDINGS__IVV", { exact: true })).toBeVisible();
-  await expect(page.getByText("category-ivv", { exact: true })).toBeVisible();
-  await expect(page.getByText("Not stored by Universe extraction", { exact: true })).toBeVisible();
-  const assetList = page.getByRole("region", { name: "Registered Alpaca assets" });
-  await expect(assetList).toBeVisible();
-  await expect(assetList.getByRole("columnheader", { name: "Ticker", exact: true })).toBeVisible();
-  await expect(assetList.getByRole("columnheader", { name: "Name", exact: true })).toBeVisible();
-  await expect(assetList.getByRole("columnheader", { name: "Alpaca Asset ID", exact: true })).toBeVisible();
-  await expect(page.getByRole("row", { name: /AAPL Apple Inc\./ })).toBeVisible();
-  await expect(page.getByRole("row", { name: /NVDA NVIDIA Corporation/ })).toBeVisible();
-  expect(requestedPaths.filter((path) => path === "/v1/universes/universe-ivv")).toHaveLength(1);
-  expect(requestedPaths.filter((path) => path === "/v1/universes/universe-ivv/assets")).toHaveLength(1);
-
-  await page.getByRole("button", { name: "Back to universes" }).click();
-  await expect(page.getByRole("row", { name: /S&P 500 holdings/ })).toBeVisible();
 });
 
 test("creates, reads, updates, and deletes a bars configuration", async ({ page }) => {
@@ -577,18 +492,19 @@ test("creates, reads, updates, and deletes a bars configuration", async ({ page 
   await page.goto("/bars");
   await expect(page.getByRole("heading", { level: 1, name: "Bars configurations" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Create bars configuration" })).toBeVisible();
-  await expect(page.getByRole("row", { name: /Daily paper holdings/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Daily paper holdings/ })).toContainText("Latest account holdings");
+  await expect(page.getByRole("row", { name: /Daily portfolio prices/ })).toContainText("Portfolio assets");
 
-  await page.getByLabel("Name").fill("Daily universe assets");
+  await page.getByLabel("Name").fill("Daily portfolio assets");
   await page.getByLabel("Registered Alpaca account").selectOption("account-paper");
   await page.getByRole("button", { name: "Asset source" }).click();
+  // The connector's three asset sources, and no other.
+  await expect(page.getByRole("listbox", { name: "Asset source" }).getByRole("option")).toHaveCount(3);
   await expect(page.getByRole("option", { name: /Latest account holdings/ })).toBeVisible();
-  await expect(page.getByRole("option", { name: /Universe assets/ })).toBeVisible();
   await expect(page.getByRole("option", { name: /Explicit assets/ })).toBeVisible();
-  await page.getByRole("option", { name: /Universe assets/ }).click();
-  await expect(page.getByText("current materialized Asset Category members", { exact: false })).toBeVisible();
-  await page.getByRole("button", { name: "Active Universe" }).click();
-  await page.getByRole("option", { name: /S&P 500 holdings/ }).click();
+  await expect(page.getByRole("option", { name: /Portfolio assets/ })).toBeVisible();
+  await page.getByRole("option", { name: /Portfolio assets/ }).click();
+  await expect(page.getByText("every asset of the live portfolios that use this configuration's prices", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "Migrated Bars profile" }).click();
   await expect(page.getByRole("option", { name: /Daily · IEX · Raw \(unadjusted\)/ })).toContainText(
     "prices are not adjusted for corporate actions",
@@ -601,26 +517,30 @@ test("creates, reads, updates, and deletes a bars configuration", async ({ page 
     "Adjusted (all corporate actions)",
   );
   await page.getByRole("button", { name: "Create configuration" }).click();
-  await expect(page.getByRole("heading", { name: "Created Daily universe assets." })).toBeVisible();
-  expect(createPayload).toMatchObject({
+  await expect(page.getByRole("heading", { name: "Created Daily portfolio assets." })).toBeVisible();
+  // Exactly the connector's create model: the portfolios source takes no asset list.
+  expect(createPayload).toEqual({
+    name: "Daily portfolio assets",
+    description: null,
+    enabled: true,
     account_uid: "account-paper",
-    asset_source: "universe",
+    asset_source: "portfolios",
     asset_uids: [],
-    universe_uid: "universe-ivv",
     frequency_id: "1d",
     feed: "sip",
     adjustment: "all",
   });
 
-  let createdRow = page.getByRole("row", { name: /Daily universe assets/ });
-  await expect(createdRow).toContainText("Universe assets");
+  let createdRow = page.getByRole("row", { name: /Daily portfolio assets/ });
+  await expect(createdRow).toContainText("Portfolio assets");
   await createdRow.getByRole("button", { name: "Edit" }).click();
   await expect(page.getByRole("heading", { name: "Edit bars configuration" })).toBeVisible();
-  await page.getByLabel("Name").fill("Daily universe assets updated");
+  await expect(page.getByRole("button", { name: "Asset source" })).toContainText("Portfolio assets");
+  await page.getByLabel("Name").fill("Daily portfolio assets updated");
   await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByRole("heading", { name: "Updated Daily universe assets updated." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Updated Daily portfolio assets updated." })).toBeVisible();
 
-  createdRow = page.getByRole("row", { name: /Daily universe assets updated/ });
+  createdRow = page.getByRole("row", { name: /Daily portfolio assets updated/ });
   await createdRow.getByRole("button", { name: "Delete" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete bars configuration" });
   await dialog.getByLabel("Confirmation word").fill("DELETE");
@@ -656,137 +576,7 @@ test("shows bars request failures in a dismissible modal", async ({ page }) => {
   await expect(errorDialog).toHaveCount(0);
 });
 
-test("creates ETF signals that only choose whether the shared Job's scheduled run includes them", async ({ page }) => {
-  const writes: { method: string; body: Record<string, unknown> }[] = [];
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (url.pathname.startsWith("/v1/signal-jobs") && ["POST", "PATCH"].includes(request.method()) && !url.pathname.includes("/actions/")) {
-      writes.push({ method: request.method(), body: request.postDataJSON() as Record<string, unknown> });
-    }
-  });
-
-  await page.goto("/signals");
-  await expect(page.getByRole("heading", { level: 1, name: "ETF Weight Signals" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "ETF Weight Signals" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Create signal" })).toHaveCount(0);
-  await expect(page.getByRole("row", { name: /Daily IVV observation/ })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Scheduled Run" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Signal UID" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Create signal", exact: true }).click();
-  const form = page.locator("form.workflow-form");
-  await expect(page.getByRole("heading", { name: "Create signal" })).toBeVisible();
-  await expect(form.getByLabel("Environment")).toHaveCount(0);
-  await expect(form.getByText("Job schedule", { exact: true })).toHaveCount(0);
-  await expect(form.getByText("Job resources", { exact: true })).toHaveCount(0);
-  await expect(form.getByLabel("Scheduling method")).toHaveCount(0);
-  await expect(form.getByLabel("CPU request")).toHaveCount(0);
-  const scheduled = form.getByLabel("Include in the shared signal Job's daily scheduled run");
-  await expect(scheduled).toBeChecked();
-  await form.getByLabel("Signal name").fill("Scheduled IWM observation");
-  await form.getByRole("button", { name: "Universe" }).click();
-  await page.getByRole("option", { name: /Russell 2000 holdings/ }).click();
-  await form.getByRole("button", { name: "Runtime Alpaca account" }).click();
-  await page.getByRole("option", { name: /Paper account/ }).click();
-  await form.getByRole("button", { name: "Create signal", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Created Scheduled IWM observation." })).toBeVisible();
-  expect(writes[0]).toEqual({
-    method: "POST",
-    body: {
-      name: "Scheduled IWM observation",
-      description: null,
-      universe_uid: "universe-iwm",
-      account_uid: "account-paper",
-      scheduled: true,
-    },
-  });
-
-  let createdRow = page.getByRole("row", { name: /Scheduled IWM observation/ });
-  await expect(createdRow).toContainText("ready");
-  await expect(createdRow).toContainText("Included");
-  await selectRowAction(page, createdRow, "Run now");
-  await expect(page.getByRole("heading", { name: /Scheduled IWM observation: run completed/ })).toBeVisible();
-
-  createdRow = page.getByRole("row", { name: /Scheduled IWM observation/ });
-  await selectRowAction(page, createdRow, "Edit");
-  await expect(page.getByRole("heading", { name: "Edit signal" })).toBeVisible();
-  await page.getByLabel("Signal name").fill("Scheduled IWM observation updated");
-  await page.getByLabel("Include in the shared signal Job's daily scheduled run").uncheck();
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByRole("heading", { name: "Updated Scheduled IWM observation updated." })).toBeVisible();
-  expect(writes[1].method).toBe("PATCH");
-  expect(writes[1].body).toMatchObject({ name: "Scheduled IWM observation updated", scheduled: false });
-  for (const retired of ["job", "enabled", "schedule_type", "cpu_request", "spot"]) {
-    expect(writes[1].body).not.toHaveProperty(retired);
-  }
-
-  createdRow = page.getByRole("row", { name: /Scheduled IWM observation updated/ });
-  await expect(createdRow).toContainText("Paused");
-  await expect(createdRow.getByRole("button", { name: "Reconcile" })).toHaveCount(0);
-  await selectRowAction(page, createdRow, "Delete");
-  const dialog = page.getByRole("dialog", { name: "Delete signal" });
-  await dialog.getByLabel("Confirmation word").fill("DELETE");
-  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(createdRow).toHaveCount(0);
-});
-
-test("shows the shared signal Job schedule read-only and pauses through the signal actions", async ({ page }) => {
-  const actions: string[] = [];
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (request.method() === "POST" && url.pathname.startsWith("/v1/signal-jobs/signal-existing/actions/")) {
-      actions.push(url.pathname.split("/").at(-1) ?? "");
-    }
-  });
-
-  await page.goto("/signals");
-  await page.getByRole("row", { name: /Daily IVV observation/ }).click();
-  await expect(page.getByRole("heading", { name: "Daily IVV observation" })).toBeVisible();
-  await expect(page.getByText("30 0 * * * · UTC", { exact: true })).toBeVisible();
-  await expect(page.getByText("Included", { exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "Pause", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
-  await expect(page.getByText("Paused", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "Resume", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
-  await expect(page.getByText("Included", { exact: true })).toBeVisible();
-  expect(actions).toEqual(["pause", "resume"]);
-});
-
-test("loads and transposes the latest signal observations only after signal selection", async ({ page }) => {
-  const observationRequests: string[] = [];
-  page.on("request", (request) => {
-    if (request.url().includes("/observations")) observationRequests.push(request.url());
-  });
-
-  await page.goto("/signals");
-  await expect(page.getByRole("row", { name: /Daily IVV observation/ })).toBeVisible();
-  expect(observationRequests).toHaveLength(0);
-
-  await page.getByRole("row", { name: /Daily IVV observation/ }).click();
-  await expect(page.getByRole("heading", { name: "Daily IVV observation" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Latest signal weights" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Observation time" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "AAPL" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "MSFT" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "NVDA" })).toBeVisible();
-  await expect(page.getByRole("row", { name: /2026-01-01 14:30:00 UTC/ })).toContainText("7.0000%");
-  await expect(page.getByRole("row", { name: /2026-01-01 14:30:00 UTC/ })).toContainText("6.0000%");
-  await expect(page.getByRole("row", { name: /2026-01-01 14:30:00 UTC/ })).toContainText("0.0000%");
-  await expect(page.getByRole("row", { name: /2026-01-03 14:30:00 UTC/ })).toContainText("8.0000%");
-  await expect(page.getByRole("row", { name: /2026-01-03 14:30:00 UTC/ })).toContainText("4.0000%");
-
-  expect(observationRequests).toHaveLength(1);
-  const requestUrl = new URL(observationRequests[0]);
-  expect(requestUrl.pathname).toBe("/v1/signal-jobs/signal-existing/observations");
-  expect(requestUrl.searchParams.get("limit")).toBe("100");
-
-  await page.getByRole("button", { name: "Back to signals" }).click();
-  await expect(page.getByRole("row", { name: /Daily IVV observation/ })).toBeVisible();
-});
-
-test("loads resolved portfolio details and value history only after portfolio selection", async ({ page }) => {
+test("loads a portfolio's details, weights, and value history only after portfolio selection", async ({ page }) => {
   const detailRequests: string[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
@@ -796,13 +586,13 @@ test("loads resolved portfolio details and value history only after portfolio se
   });
 
   await page.goto("/portfolios");
-  const row = page.getByRole("row", { name: /Daily IVV analytical portfolio/ });
+  const row = page.getByRole("row", { name: /Daily momentum portfolio/ });
   await expect(row).toBeVisible();
   expect(detailRequests).toHaveLength(0);
 
-  await row.click();
+  await row.getByText("Daily momentum portfolio", { exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "Daily IVV analytical portfolio" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Daily momentum portfolio" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Historical performance" })).toBeVisible();
   await expect(page.locator("[data-portfolio-value-chart]")).toBeVisible();
   await expect(page.getByText("101.40", { exact: true }).first()).toBeVisible();
@@ -814,10 +604,13 @@ test("loads resolved portfolio details and value history only after portfolio se
   await expect(page.getByRole("heading", { name: "Portfolio construction" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Valuation source" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Execution and calendar" })).toBeVisible();
-  await expect(page.getByText("Daily IVV observation", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("iShares Core S&P 500 ETF (IVV)", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Daily paper holdings", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Daily portfolio prices", { exact: true }).first()).toBeVisible();
   const construction = page.locator("details").filter({ hasText: "Portfolio construction" });
+  await expect(construction.getByRole("heading", { name: "Weights", exact: true })).toBeVisible();
+  await expect(construction.getByText("Provided by an application", { exact: true })).toBeVisible();
+  await expect(construction.locator("dt", { hasText: /^Assets$/ }).locator("xpath=following-sibling::dd[1]")).toHaveText("3");
+  // A portfolio built from provided weights has no signal configuration to show.
+  await expect(construction.getByRole("heading", { name: "Signal", exact: true })).toHaveCount(0);
   await expect(construction.getByText("CalendarEventSignal", { exact: true })).toBeVisible();
   await expect(construction.getByText("NYSE · regular session", { exact: true })).toBeVisible();
   await expect(construction.getByText("At market close", { exact: true })).toBeVisible();
@@ -826,6 +619,7 @@ test("loads resolved portfolio details and value history only after portfolio se
   const valuation = page.locator("details").filter({ hasText: "Valuation source" });
   await valuation.locator("summary").click();
   await expect(valuation.getByText("1 day (86400 seconds)", { exact: true })).toBeVisible();
+  await expect(valuation.getByText("Every asset of the live portfolios that use these prices", { exact: true })).toBeVisible();
   await expect(page.getByText("Portfolio valuation cadence", { exact: true })).toHaveCount(0);
   await page.locator("details").filter({ hasText: "Execution and calendar" }).locator("summary").click();
   await expect(page.getByText("NYSE trading calendar · exchange_calendar", { exact: true })).toBeVisible();
@@ -833,7 +627,7 @@ test("loads resolved portfolio details and value history only after portfolio se
   await expect(page.getByText("Portfolio UID", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Signal UID", { exact: true })).toHaveCount(0);
   await expect(page.getByText("portfolio-existing", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("signal-universe-ivv", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("weights-portfolio-config-existing", { exact: true })).toHaveCount(0);
 
   expect(detailRequests).toHaveLength(1);
   const requestUrl = new URL(detailRequests[0]);
@@ -850,8 +644,8 @@ test("shows the shared portfolio Job schedule read-only and pauses through PATCH
   });
 
   await page.goto("/portfolios");
-  await page.getByRole("row", { name: /Daily IVV analytical portfolio/ }).click();
-  await expect(page.getByRole("heading", { name: "Daily IVV analytical portfolio" })).toBeVisible();
+  await page.getByRole("row", { name: /Daily momentum portfolio/ }).getByText("Daily momentum portfolio", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Daily momentum portfolio" })).toBeVisible();
   await expect(page.getByText("0 2 * * * · UTC", { exact: true }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Pause", exact: true }).click();
@@ -863,95 +657,69 @@ test("shows the shared portfolio Job schedule read-only and pauses through PATCH
   expect(patches).toEqual([{ scheduled: false }, { scheduled: true }]);
 });
 
-test("creates, runs, updates, and deletes a durable ETF Portfolio Configuration", async ({ page }) => {
-  await page.goto("/portfolios");
-  await expect(page.getByRole("heading", { level: 1, name: "ETF Portfolios" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Create portfolio" })).toHaveCount(0);
-  await expect(page.getByRole("row", { name: /Daily IVV analytical portfolio/ })).toContainText("CalendarEventSignal");
-
-  await page.getByRole("button", { name: "Create portfolio", exact: true }).click();
-  const form = page.locator("form.workflow-form");
-  await expect(page.getByRole("heading", { name: "Create portfolio" })).toBeVisible();
-  await expect(form.getByLabel("Environment")).toHaveCount(0);
-  await expect(form.getByText("persistent daily InterpolatedPrices", { exact: false })).toBeVisible();
-  // The API rejects the retired price-extension and valuation-cadence fields, so the form has neither.
-  await expect(form.getByRole("checkbox", { name: "Extend latest valuation prices to now" })).toHaveCount(0);
-  await expect(form.getByText("Portfolio valuation cadence", { exact: false })).toHaveCount(0);
-  const stalenessInput = form.getByLabel("Maximum price staleness (seconds)");
-  await expect(stalenessInput).toHaveValue("86400");
-  await expect(form.getByText("A price may be up to 1 day old", { exact: false })).toBeVisible();
-  await expect(form.getByRole("checkbox", { name: "Stop when a required asset has no price" })).toBeChecked();
-  await expect(form.getByText("no price is invented", { exact: false })).toBeVisible();
-  await expect(form.getByText("It never creates timestamps", { exact: false })).toBeVisible();
-  await expect(form.getByLabel("Portfolio calculation notes")).toContainText("CalendarEventSignal");
-  const commissionInput = form.getByLabel("Commission fee (%)");
-  await expect(commissionInput).toHaveValue("0.018");
-  await expect(form.getByText("0.018% is stored and submitted as 0.00018", { exact: false })).toBeVisible();
-  await expect(form.locator(".workflow-form-section").last()).toContainText("Scheduled run");
-  await expect(form.getByText("Job schedule", { exact: true })).toHaveCount(0);
-  await expect(form.getByLabel("CPU request")).toHaveCount(0);
-  await expect(form.getByLabel("Include in the shared portfolio Job's daily scheduled run")).toBeChecked();
-  await expect(form.locator(".workflow-form-section + .workflow-guidance")).toBeVisible();
-  await form.getByLabel("Portfolio name").fill("Daily observed IVV portfolio");
-  await form.getByRole("button", { name: "ETF weight Signal" }).click();
-  await page.getByRole("option", { name: /Daily IVV observation/ }).click();
-  await form.getByRole("button", { name: "Alpaca Bars Configuration" }).click();
-  await page.getByRole("option", { name: /Daily paper holdings/ }).click();
-  await form.getByRole("button", { name: "Rebalance Configuration" }).click();
-  await page.getByRole("option", { name: /NYSE close/ }).click();
-  await commissionInput.fill("0.025");
-  await stalenessInput.fill("0");
-  await expect(form.getByText("Enter a whole number of seconds greater than zero", { exact: false })).toBeVisible();
-  await expect(form.getByRole("button", { name: "Create portfolio", exact: true })).toBeDisabled();
-  await stalenessInput.fill("172800");
-  await expect(form.getByText("A price may be up to 2 days old", { exact: false })).toBeVisible();
-  const createRequest = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/v1/portfolio-configurations");
-  await form.getByRole("button", { name: "Create portfolio", exact: true }).click();
-
-  // Exactly PortfolioConfigurationCreateRequest (connector ADR 0009): no retired or unknown field.
-  const expectedPortfolio = {
-    name: "Daily observed IVV portfolio",
-    description: null,
-    signal_configuration_uid: "signal-existing",
-    bars_configuration_uid: "bars-existing",
-    rebalance_configuration_uid: "rebalance-nyse-close",
-    upsample_frequency_id: "1d",
-    intraday_bar_interpolation_rule: "ffill",
-    valuation_column: "close",
-    valuation_maximum_staleness_seconds: 172800,
-    fail_on_missing_prices: true,
-    commission_fee: 0.00025,
-    scheduled: true,
-  };
-  expect((await createRequest).postDataJSON()).toEqual(expectedPortfolio);
-  await expect(page.getByRole("heading", { name: "Created Daily observed IVV portfolio." })).toBeVisible();
-
-  let createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio/ });
-  await expect(createdRow).toContainText("CalendarEventSignal");
-  await selectRowAction(page, createdRow, "Run now");
-  await expect(page.getByRole("heading", { name: /Daily observed IVV portfolio: JobRun/ })).toBeVisible();
-
-  createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio/ });
-  await selectRowAction(page, createdRow, "Edit");
-  await expect(page.getByRole("heading", { name: "Edit portfolio" })).toBeVisible();
-  await expect(page.getByLabel("Maximum price staleness (seconds)")).toHaveValue("172800");
-  await page.getByLabel("Portfolio name").fill("Daily observed IVV portfolio updated");
-  await page.getByRole("checkbox", { name: "Stop when a required asset has no price" }).uncheck();
-  const updateRequest = page.waitForRequest((request) => request.method() === "PATCH" && new URL(request.url()).pathname === "/v1/portfolio-configurations/portfolio-config-2");
-  await page.getByRole("button", { name: "Save changes" }).click();
-  expect((await updateRequest).postDataJSON()).toEqual({
-    ...expectedPortfolio,
-    name: "Daily observed IVV portfolio updated",
-    fail_on_missing_prices: false,
+test("runs and deletes portfolios built from provided weights and never creates or edits one", async ({ page }) => {
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith("/v1/portfolio-configurations") && ["POST", "PATCH"].includes(request.method()) && !url.pathname.includes("/actions/")) {
+      writes.push(`${request.method()} ${url.pathname}`);
+    }
   });
-  await expect(page.getByRole("heading", { name: "Updated Daily observed IVV portfolio updated." })).toBeVisible();
 
-  createdRow = page.getByRole("row", { name: /Daily observed IVV portfolio updated/ });
-  await selectRowAction(page, createdRow, "Delete");
-  const dialog = page.getByRole("dialog", { name: "Delete portfolio configuration" });
+  await page.goto("/portfolios");
+  await expect(page.getByRole("heading", { level: 1, name: "Portfolios" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Portfolios" })).toBeVisible();
+  await expect(page.getByText("the application creates them and gives them their weights", { exact: false })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Daily momentum portfolio/ })).toContainText("CalendarEventSignal");
+  // Creating a portfolio and giving it weights are the application's; the page offers neither.
+  await expect(page.getByRole("button", { name: "Create portfolio" })).toHaveCount(0);
+  await expect(page.locator("form.workflow-form")).toHaveCount(0);
+
+  let row = page.getByRole("row", { name: /Quarterly value portfolio/ });
+  await expect(row.getByRole("button", { name: "Edit" })).toHaveCount(0);
+  await row.getByRole("button", { name: "Run now", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /Quarterly value portfolio: JobRun/ })).toBeVisible();
+
+  row = page.getByRole("row", { name: /Quarterly value portfolio/ });
+  await row.getByRole("button", { name: "Delete", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete portfolio" });
+  await expect(dialog).toContainText("It is retired, not erased");
+  await expect(dialog).toContainText("Only the portfolio's owner can delete it.");
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(createdRow).toHaveCount(0);
+  await expect(row).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Deleted Quarterly value portfolio. The portfolio is retired; its published values were retained." })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Daily momentum portfolio/ })).toBeVisible();
+  expect(writes).toEqual([]);
+});
+
+test("tells a person who does not own a portfolio that only its owner can pause or delete it", async ({ page }) => {
+  const refusals: string[] = [];
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (url.pathname === "/v1/portfolio-configurations/portfolio-config-shared" && response.status() === 403) {
+      refusals.push(response.request().method());
+    }
+  });
+
+  await page.goto("/portfolios");
+  await page.getByRole("row", { name: /Shared income portfolio/ }).getByText("Shared income portfolio", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Shared income portfolio" })).toBeVisible();
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Only the portfolio's owner can do this." })).toBeVisible();
+  await expect(page.getByText("This portfolio belongs to another owner.", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Back to portfolios" }).click();
+  const row = page.getByRole("row", { name: /Shared income portfolio/ });
+  await row.getByRole("button", { name: "Delete", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete portfolio" });
+  await dialog.getByLabel("Confirmation word").fill("DELETE");
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(dialog.getByText("Only the portfolio's owner can do this.", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(row).toBeVisible();
+  expect(refusals).toEqual(["PATCH", "DELETE"]);
 });
 
 test("creates and edits a calendar-event rebalance configuration from its own portfolio application", async ({ page }) => {
@@ -1248,9 +1016,9 @@ test("serves same-artifact documentation routes", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Application surfaces" })).toBeVisible();
   await page.getByRole("link", { name: "Project capabilities" }).first().click();
   await expect(page.getByRole("heading", { name: "Project capabilities" })).toBeVisible();
-  await page.goto("/docs/surfaces/signals/");
-  await expect(page.getByRole("heading", { name: "Signals", exact: true })).toBeVisible();
-  await expect(page.getByText("The connector runs every signal on one shared signal Job", { exact: false })).toBeVisible();
+  await page.goto("/docs/surfaces/portfolios/");
+  await expect(page.getByRole("heading", { name: "Portfolios", exact: true })).toBeVisible();
+  await expect(page.getByText("The connector runs every portfolio on one shared portfolio Job", { exact: false })).toBeVisible();
   await page.goto("/docs/technical/frontend-implementation-plan/");
   await expect(page.getByRole("heading", { name: "Frontend implementation plan" })).toBeVisible();
 });

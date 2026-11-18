@@ -4,18 +4,19 @@ slug: /
 
 # Application surfaces
 
-The Alpaca Connectors command center currently has seven workflow pages. Portfolio functionality
-is grouped into three sibling applications under **Portfolios**:
+The Alpaca Connectors command center currently has five workflow pages. Portfolio functionality
+is grouped into two sibling applications under **Portfolios**:
 
 - **Assets** plans and executes provider-native Alpaca asset registration, with optional OpenFIGI enrichment.
-- **Accounts** registers and maintains Alpaca accounts from their API keys, which the API stores as Main Sequence Secrets.
-- **Universes** creates explicit Asset Universe registrations and Runs their linked sources.
+- **Accounts** registers and maintains Alpaca accounts from their API keys, which the API stores encrypted on the account.
 - **Bars** creates and maintains reusable Alpaca stock-bar configurations.
-- **ETF Weight Signals** creates and operates Universe-backed ETF signals, which the connector's shared signal Job runs daily.
 - **Rebalance Configurations** creates and maintains reusable calendar-event rebalance policies
   on the NYSE regular session.
-- **ETF Portfolios** composes an existing signal, bars configuration, persistent interpolated
-  prices, and a CalendarEventSignal rebalance policy into a scheduled analytical portfolio.
+- **Portfolios** lists, inspects, and runs the portfolios built from weights an application
+  provides; a portfolio's owner can also pause, resume, or delete it.
+
+The connector keeps only portfolios built from weights an application provides. Creating one and
+giving it weights are the application's capabilities, so the site never offers them.
 
 Planning never changes platform state. Execution remains disabled until the exact current inputs
 have produced a plan without blockers.

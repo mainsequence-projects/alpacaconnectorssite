@@ -12,90 +12,6 @@ const SITE_ENVIRONMENT_UID = "33333333-3333-4333-8333-333333333333";
 let siteAgentUid = SITE_AGENT_UID;
 const requestLog = [];
 const registrationOperations = new Map();
-const universeSources = [
-  {
-    uid: "source-ivv",
-    name: "S&P 500 source",
-    symbol: "IVV",
-    source_url: "https://example.com/ivv",
-    enabled: true,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-  },
-  {
-    uid: "source-qqq",
-    name: "Nasdaq 100 holdings",
-    symbol: "QQQ",
-    source_url: "https://example.com/qqq",
-    enabled: true,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-  },
-];
-let universes = [
-  {
-    uid: "universe-ivv",
-    source_uid: "source-ivv",
-    asset_category_uid: "category-ivv",
-    display_name: "S&P 500 holdings",
-    symbol: "IVV",
-    source_url: "https://example.com/ivv",
-    description: "Published holdings assets for ETF IVV.",
-    is_active: true,
-    asset_count: 3,
-    asset_category: {
-      uid: "category-ivv",
-      unique_identifier: "HOLDINGS__IVV",
-      display_name: "S&P 500 holdings",
-      description: "Published holdings assets for ETF IVV.",
-    },
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-  },
-  {
-    uid: "universe-qqq",
-    source_uid: "source-qqq",
-    asset_category_uid: "category-qqq",
-    display_name: "Nasdaq 100 holdings",
-    symbol: "QQQ",
-    source_url: "https://example.com/qqq",
-    description: "Published holdings assets for ETF QQQ.",
-    is_active: true,
-    asset_count: 2,
-    asset_category: {
-      uid: "category-qqq",
-      unique_identifier: "HOLDINGS__QQQ",
-      display_name: "Nasdaq 100 holdings",
-      description: "Published holdings assets for ETF QQQ.",
-    },
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-  },
-  {
-    uid: "universe-iwm",
-    source_uid: "source-iwm",
-    asset_category_uid: "category-iwm",
-    display_name: "Russell 2000 holdings",
-    symbol: "IWM",
-    source_url: "https://example.com/iwm",
-    description: "Published holdings assets for ETF IWM.",
-    is_active: true,
-    asset_count: 0,
-    asset_category: {
-      uid: "category-iwm",
-      unique_identifier: "HOLDINGS__IWM",
-      display_name: "Russell 2000 holdings",
-      description: "Published holdings assets for ETF IWM.",
-    },
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-  },
-];
-const universeMemberAssetUids = new Map([
-  ["universe-ivv", ["asset-aapl", "asset-msft", "asset-nvda"]],
-  ["universe-qqq", ["asset-aapl", "asset-msft"]],
-  ["universe-iwm", []],
-]);
 let accounts = [
   {
     uid: "account-paper",
@@ -104,11 +20,8 @@ let accounts = [
     is_paper: true,
     account_is_active: true,
     unique_identifier: "PAPER__ALPACA",
-    credential_source: "external",
-    api_key_secret_name: "ALPACA_PAPER_API_KEY",
-    secret_key_secret_name: "ALPACA_PAPER_SECRET_KEY",
-    api_key_secret_uid: "secret-paper-api-key",
-    secret_key_secret_uid: "secret-paper-secret-key",
+    credential_source: "imported",
+    credentials_stored: true,
     credentials_updated_at: null,
     credentials_updated_by_user_uid: null,
     status: "ACTIVE",
@@ -208,12 +121,6 @@ const assets = [
     composite_figi: null,
   },
 ];
-const secretReferences = [
-  "ALPACA_LIVE_API_KEY",
-  "ALPACA_LIVE_SECRET_KEY",
-  "ALPACA_PAPER_API_KEY",
-  "ALPACA_PAPER_SECRET_KEY",
-];
 let barConfigurations = [
   {
     uid: "bars-existing",
@@ -223,7 +130,20 @@ let barConfigurations = [
     account_uid: "account-paper",
     asset_source: "account_holdings",
     asset_uids: [],
-    universe_uid: null,
+    frequency_id: "1d",
+    feed: "sip",
+    adjustment: "all",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
+  {
+    uid: "bars-portfolios",
+    name: "Daily portfolio prices",
+    description: "Daily SIP bars for the portfolios that use them.",
+    enabled: true,
+    account_uid: "account-paper",
+    asset_source: "portfolios",
+    asset_uids: [],
     frequency_id: "1d",
     feed: "sip",
     adjustment: "all",
@@ -231,8 +151,8 @@ let barConfigurations = [
     updated_at: "2026-01-01T00:00:00Z",
   },
 ];
-// The two Jobs alpaca-connectors declares in its API workflow (connector ADR 0013): every signal
-// configuration runs on the first and every portfolio configuration on the second.
+// The Job alpaca-connectors declares in its API workflow (connector ADR 0013): every portfolio
+// configuration runs on it.
 function declaredJob(uid, expression) {
   return {
     uid,
@@ -251,8 +171,7 @@ function declaredJob(uid, expression) {
     automatic_deployment: true,
   };
 }
-const signalJob = declaredJob("job-alpaca-etf-signal", "30 0 * * *");
-const portfolioJob = declaredJob("job-alpaca-etf-portfolio", "0 2 * * *");
+const portfolioJob = declaredJob("job-alpaca-portfolio", "0 2 * * *");
 const CONFIGURATION_JOBS_WORKFLOW = ".mainsequence/workflows/alpaca-connectors-api.yaml";
 const RETIRED_JOB_SETTINGS = [
   "job",
@@ -281,34 +200,12 @@ function retiredJobSettingsErrors(body) {
     : [];
 }
 
-function signalLifecycle(configuration) {
-  return configuration.scheduled ? "ready" : "paused";
-}
-
-let signalJobs = [
-  {
-    uid: "signal-existing",
-    name: "Daily IVV observation",
-    description: "Observe the registered S&P 500 Universe.",
-    signal_uid: "signal-universe-ivv",
-    universe_uid: "universe-ivv",
-    account_uid: "account-paper",
-    scheduled: true,
-    job_uid: signalJob.uid,
-    job: signalJob,
-    lifecycle_state: "ready",
-    latest_run_status: null,
-    latest_run_at: null,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-  },
-];
 // Calendar-event rebalance policies (connector ADR 0009); calendar_event_signal is the only strategy.
 let portfolioRebalanceConfigurations = [
   {
     uid: "rebalance-nyse-close",
     name: "NYSE close",
-    description: "Use the latest observed ETF weight frame at each NYSE close.",
+    description: "Use the latest weights at each NYSE close.",
     strategy: "calendar_event_signal",
     calendar_identifier: "NYSE",
     session_label: "regular",
@@ -320,17 +217,12 @@ let portfolioRebalanceConfigurations = [
     updated_at: "2026-01-01T00:00:00Z",
   },
 ];
-let portfolioConfigurations = [
-  {
-    uid: "portfolio-config-existing",
-    name: "Daily IVV analytical portfolio",
-    description: "Track observed IVV weights using daily Alpaca bars.",
-    signal_configuration_uid: "signal-existing",
-    signal_uid: "signal-universe-ivv",
-    bars_configuration_uid: "bars-existing",
+function portfolioConfiguration(values) {
+  return {
+    signal_uid: `weights-${values.uid}`,
+    bars_configuration_uid: "bars-portfolios",
     rebalance_configuration_uid: "rebalance-nyse-close",
     rebalance_strategy: "calendar_event_signal",
-    portfolio_uid: "portfolio-existing",
     scheduled: true,
     job_uid: portfolioJob.uid,
     upsample_frequency_id: "1d",
@@ -340,27 +232,55 @@ let portfolioConfigurations = [
     fail_on_missing_prices: true,
     commission_fee: 0.00018,
     job: portfolioJob,
+    created_at: "2026-01-01T00:00:00Z",
+    ...values,
+  };
+}
+
+// Portfolios built from weights an application provides (connector ADR 0024). The fixture's caller
+// owns the first two; only a portfolio's owner may change, pause, or delete it.
+let portfolioConfigurations = [
+  portfolioConfiguration({
+    uid: "portfolio-config-existing",
+    name: "Daily momentum portfolio",
+    description: "Weights given daily by an application.",
+    portfolio_uid: "portfolio-existing",
     latest_run_status: "SUCCEEDED",
     latest_run_at: "2026-01-03T15:00:00Z",
-    created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-03T15:00:00Z",
-  },
+  }),
+  portfolioConfiguration({
+    uid: "portfolio-config-quarterly",
+    name: "Quarterly value portfolio",
+    description: "Weights given each quarter by an application.",
+    portfolio_uid: null,
+    latest_run_status: null,
+    latest_run_at: null,
+    updated_at: "2026-01-01T00:00:00Z",
+  }),
+  portfolioConfiguration({
+    uid: "portfolio-config-shared",
+    name: "Shared income portfolio",
+    description: "Another owner's portfolio.",
+    portfolio_uid: "portfolio-shared",
+    latest_run_status: "SUCCEEDED",
+    latest_run_at: "2026-01-03T15:00:00Z",
+    updated_at: "2026-01-03T15:00:00Z",
+  }),
 ];
+// Mirrors the API's refusal of a change by anyone but the portfolio's owner; it never names the owner.
+const PORTFOLIOS_OF_ANOTHER_OWNER = new Set(["portfolio-config-shared"]);
+const PORTFOLIO_OWNED_BY_ANOTHER = {
+  detail: {
+    code: "portfolio_owned_by_another",
+    message: "This portfolio belongs to another owner.",
+    retryable: false,
+  },
+};
 
 // The API's portfolio and rebalance request models forbid unknown fields (`extra="forbid"`), so a
 // retired field such as `forward_fill_to_now` or `portfolio_prices_frequency` is a 422. These
 // checks mirror those models and their defaults; 422 bodies never echo the submitted input.
-const PORTFOLIO_REQUEST_DEFAULTS = {
-  description: null,
-  upsample_frequency_id: "1d",
-  intraday_bar_interpolation_rule: "ffill",
-  valuation_column: "close",
-  valuation_maximum_staleness_seconds: 86400,
-  fail_on_missing_prices: true,
-  commission_fee: 0.00018,
-  scheduled: true,
-};
-const PORTFOLIO_REQUEST_REQUIRED = ["name", "signal_configuration_uid", "bars_configuration_uid", "rebalance_configuration_uid"];
 const REBALANCE_REQUEST_DEFAULTS = {
   description: null,
   strategy: "calendar_event_signal",
@@ -375,7 +295,6 @@ const isText = (value) => typeof value === "string" && value.trim().length > 0;
 const PORTFOLIO_FIELD_CHECKS = {
   name: [isText, "String should have at least 1 character"],
   description: [(value) => value === null || typeof value === "string", "Input should be a valid string"],
-  signal_configuration_uid: [isText, "String should have at least 1 character"],
   bars_configuration_uid: [isText, "String should have at least 1 character"],
   rebalance_configuration_uid: [isText, "String should have at least 1 character"],
   upsample_frequency_id: [(value) => value === "1d", "Input should be '1d'"],
@@ -417,14 +336,15 @@ function requestModelErrors(body, { checks, required, partial, label }) {
   return errors;
 }
 
-function portfolioRequestErrors(body, { partial }) {
+// Applications create portfolios, so only the API's partial PATCH model is mirrored here.
+function portfolioUpdateErrors(body) {
   // The API rejects retired Job settings before it validates individual fields.
   const retired = retiredJobSettingsErrors(body);
   if (retired.length) return retired;
   return requestModelErrors(body, {
     checks: PORTFOLIO_FIELD_CHECKS,
-    required: PORTFOLIO_REQUEST_REQUIRED,
-    partial,
+    required: [],
+    partial: true,
     label: "portfolio configuration",
   });
 }
@@ -444,6 +364,31 @@ function linkedRebalance(rebalanceConfigurationUid) {
   if (!rebalance) return null;
   const { uid: _uid, created_at: _createdAt, updated_at: _updatedAt, ...linked } = rebalance;
   return linked;
+}
+
+// The detail's linked_bars projection, named as the API names each asset source.
+function linkedBars(barsConfigurationUid) {
+  const bars = barConfigurations.find((candidate) => candidate.uid === barsConfigurationUid);
+  if (!bars) return null;
+  const account = accounts.find((candidate) => candidate.uid === bars.account_uid);
+  const assetSourceNames = {
+    assets: `${bars.asset_uids.length} explicitly selected registered assets`,
+    account_holdings: `Latest holdings for ${account?.account_name ?? "the account"} within the trailing 30 days`,
+    portfolios: "Every asset of the live portfolios that use these prices",
+  };
+  return {
+    name: bars.name,
+    description: bars.description,
+    enabled: bars.enabled,
+    account_name: account?.account_name ?? "Unknown account",
+    account_environment: account?.is_paper === false ? "live" : "paper",
+    asset_source: bars.asset_source,
+    asset_source_name: assetSourceNames[bars.asset_source],
+    asset_count: bars.asset_source === "assets" ? bars.asset_uids.length : null,
+    frequency_id: bars.frequency_id,
+    feed: bars.feed,
+    adjustment: bars.adjustment,
+  };
 }
 
 function portfolioConfigurationDetail(configuration) {
@@ -479,28 +424,13 @@ function portfolioConfigurationDetail(configuration) {
   ] : [];
   return {
     ...configuration,
-    linked_signal: {
-      name: "Daily IVV observation",
-      description: "Observe current IVV constituents and weights.",
-      scheduled: true,
-      universe_name: "iShares Core S&P 500 ETF",
-      universe_symbol: "IVV",
-      account_name: "Paper brokerage",
-      account_environment: "paper",
+    provided_weights: {
+      signal_uid: configuration.signal_uid,
+      first_observation_at: "2026-01-01T14:30:00Z",
+      last_observation_at: "2026-01-03T14:30:00Z",
+      asset_count: 3,
     },
-    linked_bars: {
-      name: "Daily paper holdings",
-      description: "Daily SIP bars for the configured universe.",
-      enabled: true,
-      account_name: "Paper brokerage",
-      account_environment: "paper",
-      asset_source: "universe",
-      asset_source_name: "iShares Core S&P 500 ETF (IVV)",
-      asset_count: 504,
-      frequency_id: "1d",
-      feed: "sip",
-      adjustment: "all",
-    },
+    linked_bars: linkedBars(configuration.bars_configuration_uid),
     linked_rebalance: linkedRebalance(configuration.rebalance_configuration_uid),
     canonical_portfolio: {
       materialized,
@@ -541,44 +471,9 @@ function portfolioConfigurationDetail(configuration) {
     },
   };
 }
-const signalObservations = {
-  "signal-existing": {
-    configuration_uid: "signal-existing",
-    signal_uid: "signal-universe-ivv",
-    observation_count: 3,
-    asset_count: 3,
-    time_indexes: [
-      "2026-01-01T14:30:00Z",
-      "2026-01-02T14:30:00Z",
-      "2026-01-03T14:30:00Z",
-    ],
-    assets: [
-      {
-        asset_identifier: "ALPACA::11111111-1111-4111-8111-111111111111",
-        symbol: "AAPL",
-        name: "Apple Inc.",
-        weights: [0.07, 0.075, 0.08],
-      },
-      {
-        asset_identifier: "ALPACA::22222222-2222-4222-8222-222222222222",
-        symbol: "MSFT",
-        name: "Microsoft Corporation",
-        weights: [0.06, 0.055, 0.05],
-      },
-      {
-        asset_identifier: "ALPACA::33333333-3333-4333-8333-333333333333",
-        symbol: "NVDA",
-        name: "NVIDIA Corporation",
-        weights: [0, null, 0.04],
-      },
-    ],
-  },
-};
-
 const capabilities = [
   ["project_state", "Project State", "Expose API health and current configuration.", "partial", ["api"]],
   ["assets", "Assets", "Resolve and register canonical Alpaca-backed market instruments.", "available", ["cli", "api", "python"]],
-  ["universes", "Universes", "Build reusable collections of registered assets.", "available", ["cli", "api", "python"]],
   ["market_data", "Market Data", "Publish and update Alpaca OHLCV observations.", "partial", ["cli", "python"]],
   ["accounts", "Accounts", "Represent and refresh an Alpaca brokerage account.", "partial", ["cli", "python"]],
   ["holdings", "Holdings", "Represent asset exposure from brokerage or fund holdings.", "partial", ["cli", "python"]],
@@ -692,13 +587,6 @@ function accountValidationErrors(body, { allowed, required }) {
     }
   }
   return errors;
-}
-
-function managedSecretNames(uniqueIdentifier) {
-  return {
-    api_key_secret_name: `ALPACA_CONNECTORS__${uniqueIdentifier}__API_KEY`,
-    secret_key_secret_name: `ALPACA_CONNECTORS__${uniqueIdentifier}__SECRET_KEY`,
-  };
 }
 
 async function readJson(request) {
@@ -842,9 +730,7 @@ createServer(async (request, response) => {
   }
   if (request.method === "GET" && url.pathname === "/v1/project-state/configuration") {
     return sendJson(response, 200, {
-      supported_component_providers: ["ishares"],
       migrated_market_data_profiles: ["1d/iex/raw", "1d/sip/all"],
-      universe_sources_are_user_managed: true,
       organization_environment_uid: SITE_ENVIRONMENT_UID,
       organization_environment_name: "Local development",
       agent_uid: siteAgentUid,
@@ -993,20 +879,6 @@ createServer(async (request, response) => {
       warnings_by_symbol: {},
     });
   }
-  if (request.method === "GET" && url.pathname === "/v1/accounts/secret-references") {
-    const search = (url.searchParams.get("search") ?? "").toLowerCase();
-    const matched = secretReferences.filter((name) => !search || name.toLowerCase().includes(search));
-    return sendJson(response, 200, {
-      items: matched.map((name) => ({ name })),
-      pageInfo: {
-        pageIndex: 0,
-        pageSize: Number(url.searchParams.get("limit") ?? 100),
-        totalItems: matched.length,
-        hasNextPage: false,
-        hasPreviousPage: false,
-      },
-    });
-  }
   if (request.method === "GET" && url.pathname === "/v1/accounts/discovery") {
     return sendJson(response, 200, {
       contract: "command-center.resource_discovery@v1",
@@ -1090,18 +962,12 @@ createServer(async (request, response) => {
     if (errors.length) return sendJson(response, 422, { detail: errors });
     const uid = `account-${accounts.length + 1}`;
     const uniqueIdentifier = `${uid.toUpperCase()}__ALPACA_${body.environment.toUpperCase()}`;
-    const secretNames = managedSecretNames(uniqueIdentifier);
     return sendJson(response, 200, {
       account_unique_identifier: uniqueIdentifier,
       account_number: "PA0000000002",
       status: "ACTIVE",
       is_paper: body.environment === "paper",
       credential_source: "managed",
-      ...secretNames,
-      secret_writes: [
-        { name: secretNames.api_key_secret_name, action: "create" },
-        { name: secretNames.secret_key_secret_name, action: "create" },
-      ],
       equity: "100000",
       cash: "50000",
       would_write_holdings: 3,
@@ -1131,9 +997,7 @@ createServer(async (request, response) => {
       is_paper: body.environment === "paper",
       account_is_active: true,
       credential_source: "managed",
-      ...managedSecretNames(uniqueIdentifier),
-      api_key_secret_uid: `secret-${uid}-api-key`,
-      secret_key_secret_uid: `secret-${uid}-secret-key`,
+      credentials_stored: true,
       credentials_updated_at: now,
       credentials_updated_by_user_uid: "user-e2e",
       status: "ACTIVE",
@@ -1231,13 +1095,10 @@ createServer(async (request, response) => {
       const { credentials, key_request_uid: _keyRequestUid, ...changes } = body;
       accounts[index] = { ...accounts[index], ...changes };
       if (credentials) {
-        const uid = accounts[index].uid;
         accounts[index] = {
           ...accounts[index],
           credential_source: "managed",
-          ...managedSecretNames(accounts[index].unique_identifier),
-          api_key_secret_uid: `secret-${uid}-api-key`,
-          secret_key_secret_uid: `secret-${uid}-secret-key`,
+          credentials_stored: true,
           credentials_updated_at: new Date().toISOString(),
           credentials_updated_by_user_uid: "user-e2e",
         };
@@ -1252,285 +1113,11 @@ createServer(async (request, response) => {
         registration_removed: true,
         account_deactivated: true,
         retained_holdings_sets: 0,
-        deleted_secrets: deleted.credential_source === "managed"
-          ? [deleted.api_key_secret_name, deleted.secret_key_secret_name]
-          : [],
+        // Keys are stored encrypted on the row (connector ADR 0017); nothing lives in Secrets.
+        deleted_secrets: [],
         warnings: [],
       });
     }
-  }
-  if (request.method === "GET" && url.pathname === "/v1/universe-sources") {
-    return sendJson(response, 200, {
-      items: universeSources.filter((source) => source.enabled),
-      pageInfo: {
-        pageIndex: 0,
-        pageSize: 100,
-        totalItems: universeSources.length,
-        hasNextPage: false,
-        hasPreviousPage: false,
-      },
-    });
-  }
-  if (
-    request.method === "POST"
-    && /^\/v1\/universe-sources\/[^/]+\/actions\/preview$/.test(url.pathname)
-  ) {
-    const sourceUid = decodeURIComponent(url.pathname.split("/")[3]);
-    const source = universeSources.find((candidate) => candidate.uid === sourceUid);
-    if (!source) return sendJson(response, 404, { detail: "Universe source not found." });
-    return sendJson(response, 200, {
-      source,
-      plan_summary: { etf_ticker: source.symbol, constituents: 3, registered_assets: 3 },
-      has_blockers: false,
-    });
-  }
-  if (request.method === "GET" && url.pathname === "/v1/universes/discovery") {
-    return sendJson(response, 200, {
-      contract: "command-center.resource_discovery@v1",
-      resource: {
-        id: "asset-universes",
-        label: "Registered universes",
-        item_label: "universe",
-        identity: { fields: ["uid"] },
-      },
-      list: {
-        controls: {
-          search: {
-            placeholder: "Search registered universes",
-            fields: ["display_name", "symbol"],
-          },
-          filters: [],
-          ordering: ["display_name", "symbol", "updated_at"],
-        },
-        columns: [
-          { id: "display-name", header: "Universe", default_visible: true, hideable: false, sortable_key: "display_name" },
-          { id: "symbol", header: "Symbol", value_path: "symbol", data_type: "text", default_visible: true, hideable: true, sortable_key: "symbol" },
-          { id: "uid", header: "UID", value_path: "uid", data_type: "text", default_visible: true, hideable: true },
-          { id: "asset-count", header: "Assets", value_path: "asset_count", data_type: "number", default_visible: true, hideable: true },
-          { id: "is-active", header: "Status", value_path: "is_active", data_type: "boolean", default_visible: true, hideable: true },
-        ],
-      },
-      bulk_actions: [
-        {
-          id: "activate",
-          label: "Activate",
-          endpoint: "/v1/universes/actions/activate",
-          preflight_endpoint: "/v1/universes/actions/activate/preflight",
-          method: "POST",
-          selection_modes: ["explicit"],
-          options: [],
-        },
-        {
-          id: "deactivate",
-          label: "Deactivate",
-          endpoint: "/v1/universes/actions/deactivate",
-          preflight_endpoint: "/v1/universes/actions/deactivate/preflight",
-          method: "POST",
-          tone: "danger",
-          selection_modes: ["explicit"],
-          confirmation: {
-            title: "Deactivate universes",
-            word: "DEACTIVATE",
-            button_label: "Deactivate",
-            warning: "Inactive universes cannot be used for new market-data updates.",
-          },
-          options: [],
-        },
-        {
-          id: "remove",
-          label: "Delete",
-          endpoint: "/v1/universes/actions/remove",
-          preflight_endpoint: "/v1/universes/actions/remove/preflight",
-          method: "POST",
-          tone: "danger",
-          selection_modes: ["explicit"],
-          confirmation: {
-            title: "Delete universes",
-            word: "DELETE",
-            button_label: "Delete",
-            warning: "The category and all of its memberships will be permanently deleted.",
-          },
-          options: [],
-        },
-      ],
-    });
-  }
-  if (request.method === "GET" && url.pathname === "/v1/universes") {
-    const search = (url.searchParams.get("search") ?? "").toLowerCase();
-    const matched = universes.filter((universe) => (
-      !search
-      || universe.display_name.toLowerCase().includes(search)
-      || universe.symbol.toLowerCase().includes(search)
-    ));
-    return sendJson(response, 200, {
-      items: matched,
-      pageInfo: {
-        pageIndex: 0,
-        pageSize: Number(url.searchParams.get("limit") ?? 25),
-        totalItems: matched.length,
-        hasNextPage: false,
-        hasPreviousPage: false,
-      },
-    });
-  }
-  const universeAssetsMatch = url.pathname.match(/^\/v1\/universes\/([^/]+)\/assets$/);
-  if (request.method === "GET" && universeAssetsMatch) {
-    const universeUid = decodeURIComponent(universeAssetsMatch[1]);
-    const universe = universes.find((candidate) => candidate.uid === universeUid);
-    if (!universe) return sendJson(response, 404, { detail: "Universe not found." });
-    const memberUids = new Set(universeMemberAssetUids.get(universeUid) ?? []);
-    const search = (url.searchParams.get("search") ?? "").toLowerCase();
-    const matched = assets.filter((asset) => (
-      memberUids.has(asset.uid)
-      && (
-        !search
-        || asset.ticker.toLowerCase().includes(search)
-        || asset.name.toLowerCase().includes(search)
-        || asset.alpaca_asset_id.includes(search)
-      )
-    ));
-    return sendJson(response, 200, {
-      items: matched,
-      pageInfo: {
-        pageIndex: 0,
-        pageSize: Number(url.searchParams.get("limit") ?? 25),
-        totalItems: matched.length,
-        hasNextPage: false,
-        hasPreviousPage: false,
-      },
-    });
-  }
-  const universeDetailMatch = url.pathname.match(/^\/v1\/universes\/([^/]+)$/);
-  if (request.method === "GET" && universeDetailMatch) {
-    const universeUid = decodeURIComponent(universeDetailMatch[1]);
-    const universe = universes.find((candidate) => candidate.uid === universeUid);
-    return universe
-      ? sendJson(response, 200, universe)
-      : sendJson(response, 404, { detail: "Universe not found." });
-  }
-  if (request.method === "POST" && url.pathname === "/v1/universes") {
-    const body = await readJson(request);
-    const normalizedSymbol = String(body.symbol ?? "").trim().toUpperCase();
-    const sourceUid = `source-${normalizedSymbol.toLowerCase()}`;
-    const now = new Date().toISOString();
-    if (!universeSources.some((source) => source.uid === sourceUid)) {
-      universeSources.push({
-        uid: sourceUid,
-        name: body.name,
-        symbol: normalizedSymbol,
-        source_url: body.source_url,
-        enabled: true,
-        created_at: now,
-        updated_at: now,
-      });
-    }
-    const universe = {
-      uid: `universe-${normalizedSymbol.toLowerCase()}`,
-      source_uid: sourceUid,
-      asset_category_uid: `category-${normalizedSymbol.toLowerCase()}`,
-      display_name: body.name,
-      symbol: normalizedSymbol,
-      source_url: body.source_url,
-      description: `Configured holdings universe for ETF ${normalizedSymbol}.`,
-      is_active: true,
-      asset_count: 0,
-      asset_category: {
-        uid: `category-${normalizedSymbol.toLowerCase()}`,
-        unique_identifier: `HOLDINGS__${normalizedSymbol}`,
-        display_name: body.name,
-        description: `Configured holdings universe for ETF ${normalizedSymbol}.`,
-      },
-      created_at: now,
-      updated_at: now,
-    };
-    universes.push(universe);
-    universeMemberAssetUids.set(universe.uid, []);
-    return sendJson(response, 201, universe);
-  }
-  const universeActionMatch = url.pathname.match(
-    /^\/v1\/universes\/actions\/(run|activate|deactivate|remove)(\/preflight)?$/,
-  );
-  if (request.method === "POST" && universeActionMatch) {
-    const body = await readJson(request);
-    const action = universeActionMatch[1];
-    if (action === "run" && !accounts.some((account) => account.uid === body.options?.account_uid)) {
-      return sendJson(response, 400, { detail: "options.account_uid must select a registered Alpaca account." });
-    }
-    const selectedUids = body.selection?.uids ?? [];
-    const selected = universes.filter((universe) => selectedUids.includes(universe.uid));
-    const missing = selectedUids.filter((uid) => !selected.some((universe) => universe.uid === uid));
-    if (universeActionMatch[2]) {
-      const runWarnings = action === "run"
-        ? selected.map((universe) => `${universe.display_name}: missing Alpaca-backed constituents will be registered automatically through the account selected for this Run.`)
-        : [];
-      return sendJson(response, 200, {
-        contract: "command-center.bulk_action_preflight@v1",
-        allowed: missing.length === 0,
-        detail: missing.length === 0
-          ? (action === "run"
-              ? "Selected universes are ready to run. Run extracts constituents, registers missing Alpaca-backed assets, and refreshes category membership."
-              : "The selected action is ready.")
-          : "A universe is missing.",
-        matched_count: selected.length,
-        blockers: missing.map((uid) => `Missing universe: ${uid}`),
-        warnings: action === "remove"
-          ? [`${selected.reduce((count, universe) => count + universe.asset_count, 0)} memberships will be deleted.`]
-          : runWarnings,
-        results: action === "run" ? selected.map((universe) => ({
-          universe,
-          plan_summary: { constituents: 3, registered_assets: universe.asset_count, assets_to_register: Math.max(0, 3 - universe.asset_count) },
-          has_blockers: false,
-        })) : undefined,
-      });
-    }
-    if (missing.length > 0) return sendJson(response, 409, { detail: "A universe is missing." });
-    if (action === "remove") {
-      universes = universes.filter((universe) => !selectedUids.includes(universe.uid));
-      selectedUids.forEach((uid) => universeMemberAssetUids.delete(uid));
-      return sendJson(response, 200, {
-        results: selected.map((universe) => ({
-          universe_uid: universe.uid,
-          asset_category_uid: universe.asset_category_uid,
-          deleted: true,
-        })),
-      });
-    }
-    if (action === "run") {
-      selectedUids.forEach((uid) => {
-        universeMemberAssetUids.set(uid, ["asset-aapl", "asset-msft", "asset-nvda"]);
-      });
-      universes = universes.map((universe) => (
-        selectedUids.includes(universe.uid)
-          ? {
-              ...universe,
-              asset_count: 3,
-            }
-          : universe
-      ));
-      return sendJson(response, 200, {
-        results: universes.filter((universe) => selectedUids.includes(universe.uid)).map((universe) => ({
-          universe,
-          account_uid: body.options.account_uid,
-          existing_asset_uids_by_symbol: {
-            AAPL: "asset-aapl",
-            MSFT: "asset-msft",
-          },
-          created_asset_uids_by_symbol: {
-            NVDA: "asset-nvda",
-          },
-          missing_symbols_from_alpaca: [],
-          openfigi_unmatched_symbols: [],
-          warnings_by_symbol: {},
-        })),
-      });
-    }
-    const isActive = action === "activate";
-    universes = universes.map((universe) => (
-      selectedUids.includes(universe.uid) ? { ...universe, is_active: isActive } : universe
-    ));
-    return sendJson(response, 200, {
-      results: universes.filter((universe) => selectedUids.includes(universe.uid)),
-    });
   }
   if (request.method === "GET" && url.pathname === "/v1/market-data/bar-configurations/discovery") {
     return sendJson(response, 200, {
@@ -1555,8 +1142,8 @@ createServer(async (request, response) => {
               type: "select",
               options: [
                 { value: "account_holdings", label: "Latest account holdings" },
-                { value: "universe", label: "Universe assets" },
                 { value: "assets", label: "Explicit assets" },
+                { value: "portfolios", label: "Portfolio assets" },
               ],
             },
           ],
@@ -1625,151 +1212,18 @@ createServer(async (request, response) => {
       return sendJson(response, 200, { uid: deleted.uid, deleted: true });
     }
   }
-  if (request.method === "GET" && url.pathname === "/v1/signal-jobs/discovery") {
-    return sendJson(response, 200, {
-      contract: "command-center.resource_discovery@v1",
-      resource: {
-        id: "alpaca-etf-signal-jobs",
-        label: "ETF Weight Signals",
-        item_label: "signal configuration",
-        identity: { fields: ["uid"] },
-      },
-      list: {
-        controls: {
-          search: { placeholder: "Search etf weight signals", fields: ["name", "description"] },
-          filters: [
-            { key: "scheduled", label: "Scheduled", type: "boolean" },
-          ],
-          ordering: ["name", "updated_at"],
-        },
-        columns: [
-          { id: "name", header: "Signal", value_path: "name", data_type: "text", default_visible: true, hideable: false, sortable_key: "name" },
-          { id: "signal-uid", header: "Signal UID", value_path: "signal_uid", data_type: "text", default_visible: true, hideable: true },
-          { id: "lifecycle-state", header: "State", value_path: "lifecycle_state", data_type: "text", default_visible: true, hideable: true },
-          { id: "job-image-status", header: "Image", value_path: "job.image_status", data_type: "text", default_visible: true, hideable: true },
-          { id: "latest-run-status", header: "Last Run", value_path: "latest_run_status", data_type: "text", default_visible: true, hideable: true },
-          { id: "latest-run-at", header: "Last Run At", value_path: "latest_run_at", data_type: "datetime", default_visible: true, hideable: true },
-          { id: "scheduled", header: "Scheduled Run", value_path: "scheduled", data_type: "boolean", default_visible: true, hideable: true },
-        ],
-      },
-      bulk_actions: [],
-    });
-  }
-  if (request.method === "GET" && url.pathname === "/v1/signal-jobs") {
-    const search = (url.searchParams.get("search") ?? "").toLowerCase();
-    const scheduled = url.searchParams.get("scheduled");
-    const matched = signalJobs.filter((configuration) => (
-      (!search
-        || configuration.name.toLowerCase().includes(search)
-        || configuration.description?.toLowerCase().includes(search))
-      && (scheduled === null || String(configuration.scheduled) === scheduled)
-    ));
-    return sendJson(response, 200, {
-      items: matched,
-      pageInfo: {
-        pageIndex: 0,
-        pageSize: Number(url.searchParams.get("limit") ?? 25),
-        totalItems: matched.length,
-        hasNextPage: false,
-        hasPreviousPage: false,
-      },
-    });
-  }
-  if (request.method === "POST" && url.pathname === "/v1/signal-jobs") {
-    const body = await readJson(request);
-    const errors = retiredJobSettingsErrors(body);
-    if (errors.length) return sendJson(response, 422, { detail: errors });
-    const now = new Date().toISOString();
-    const created = {
-      uid: `signal-${signalJobs.length + 1}`,
-      name: body.name,
-      description: body.description,
-      signal_uid: `signal-${body.universe_uid}`,
-      universe_uid: body.universe_uid,
-      account_uid: body.account_uid,
-      scheduled: body.scheduled ?? true,
-      job_uid: signalJob.uid,
-      job: signalJob,
-      latest_run_status: null,
-      latest_run_at: null,
-      created_at: now,
-      updated_at: now,
-    };
-    created.lifecycle_state = signalLifecycle(created);
-    signalJobs.push(created);
-    return sendJson(response, 201, created);
-  }
-  const signalActionMatch = url.pathname.match(/^\/v1\/signal-jobs\/([^/]+)\/actions\/(run|pause|resume|reconcile)$/);
-  if (request.method === "POST" && signalActionMatch) {
-    const uid = decodeURIComponent(signalActionMatch[1]);
-    const action = signalActionMatch[2];
-    const index = signalJobs.findIndex((configuration) => configuration.uid === uid);
-    if (index < 0) return sendJson(response, 404, { detail: "Signal configuration not found." });
-    await readJson(request);
-    if (action === "run") {
-      const now = new Date().toISOString();
-      signalJobs[index] = { ...signalJobs[index], latest_run_status: "PENDING", latest_run_at: now };
-      return sendJson(response, 202, {
-        configuration_uid: uid,
-        job_uid: signalJobs[index].job_uid,
-        job_run_uid: `job-run-${uid}`,
-        status: "PENDING",
-        status_url: `/v1/operations/job-runs/job-run-${uid}`,
-        poll_after_ms: 1000,
-      });
-    }
-    const scheduled = action === "resume" ? true : action === "pause" ? false : signalJobs[index].scheduled;
-    signalJobs[index] = { ...signalJobs[index], scheduled, updated_at: new Date().toISOString() };
-    signalJobs[index].lifecycle_state = signalLifecycle(signalJobs[index]);
-    return sendJson(response, 200, signalJobs[index]);
-  }
-  const signalRunsMatch = url.pathname.match(/^\/v1\/signal-jobs\/([^/]+)\/runs$/);
-  if (request.method === "GET" && signalRunsMatch) return sendJson(response, 200, []);
-  const signalObservationsMatch = url.pathname.match(/^\/v1\/signal-jobs\/([^/]+)\/observations$/);
-  if (request.method === "GET" && signalObservationsMatch) {
-    const uid = decodeURIComponent(signalObservationsMatch[1]);
-    const configuration = signalJobs.find((item) => item.uid === uid);
-    if (!configuration) return sendJson(response, 404, { detail: "Signal configuration not found." });
-    return sendJson(response, 200, signalObservations[uid] ?? {
-      configuration_uid: uid,
-      signal_uid: configuration.signal_uid,
-      observation_count: 0,
-      asset_count: 0,
-      time_indexes: [],
-      assets: [],
-    });
-  }
-  const signalConfigurationMatch = url.pathname.match(/^\/v1\/signal-jobs\/([^/]+)$/);
-  if (signalConfigurationMatch) {
-    const uid = decodeURIComponent(signalConfigurationMatch[1]);
-    const index = signalJobs.findIndex((configuration) => configuration.uid === uid);
-    if (index < 0) return sendJson(response, 404, { detail: "Signal configuration not found." });
-    if (request.method === "GET") return sendJson(response, 200, signalJobs[index]);
-    if (request.method === "PATCH") {
-      const body = await readJson(request);
-      const errors = retiredJobSettingsErrors(body);
-      if (errors.length) return sendJson(response, 422, { detail: errors });
-      signalJobs[index] = { ...signalJobs[index], ...body, updated_at: new Date().toISOString() };
-      signalJobs[index].lifecycle_state = signalLifecycle(signalJobs[index]);
-      return sendJson(response, 200, signalJobs[index]);
-    }
-    if (request.method === "DELETE") {
-      const [deleted] = signalJobs.splice(index, 1);
-      return sendJson(response, 200, { configuration_uid: deleted.uid, deleted: true });
-    }
-  }
   if (request.method === "GET" && url.pathname === "/v1/portfolio-configurations/discovery") {
     return sendJson(response, 200, {
       contract: "command-center.resource_discovery@v1",
       resource: {
-        id: "alpaca-etf-portfolio-configurations",
-        label: "ETF Portfolios",
-        item_label: "portfolio configuration",
+        id: "alpaca-portfolio-configurations",
+        label: "Portfolios",
+        item_label: "portfolio",
         identity: { fields: ["uid"] },
       },
       list: {
         controls: {
-          search: { placeholder: "Search ETF Portfolios", fields: ["name", "description"] },
+          search: { placeholder: "Search portfolios", fields: ["name", "description"] },
           filters: [],
           ordering: ["name", "updated_at"],
         },
@@ -1803,45 +1257,6 @@ createServer(async (request, response) => {
       },
     });
   }
-  if (request.method === "POST" && url.pathname === "/v1/portfolio-configurations") {
-    const body = await readJson(request);
-    const errors = portfolioRequestErrors(body, { partial: false });
-    if (errors.length) return sendJson(response, 422, { detail: errors });
-    const now = new Date().toISOString();
-    const ordinal = portfolioConfigurations.length + 1;
-    const values = { ...PORTFOLIO_REQUEST_DEFAULTS, ...body };
-    const signal = signalJobs.find((candidate) => candidate.uid === values.signal_configuration_uid);
-    const rebalance = portfolioRebalanceConfigurations.find((candidate) => candidate.uid === values.rebalance_configuration_uid);
-    if (!signal || !rebalance) {
-      return sendJson(response, 404, { detail: "Signal or rebalance configuration not found." });
-    }
-    const created = {
-      uid: `portfolio-config-${ordinal}`,
-      name: values.name,
-      description: values.description,
-      signal_configuration_uid: values.signal_configuration_uid,
-      signal_uid: signal.signal_uid,
-      bars_configuration_uid: values.bars_configuration_uid,
-      rebalance_configuration_uid: values.rebalance_configuration_uid,
-      rebalance_strategy: rebalance.strategy,
-      portfolio_uid: null,
-      scheduled: values.scheduled,
-      job_uid: portfolioJob.uid,
-      upsample_frequency_id: values.upsample_frequency_id,
-      intraday_bar_interpolation_rule: values.intraday_bar_interpolation_rule,
-      valuation_column: values.valuation_column,
-      valuation_maximum_staleness_seconds: values.valuation_maximum_staleness_seconds,
-      fail_on_missing_prices: values.fail_on_missing_prices,
-      commission_fee: values.commission_fee,
-      job: portfolioJob,
-      latest_run_status: null,
-      latest_run_at: null,
-      created_at: now,
-      updated_at: now,
-    };
-    portfolioConfigurations.push(created);
-    return sendJson(response, 201, created);
-  }
   const portfolioActionMatch = url.pathname.match(/^\/v1\/portfolio-configurations\/([^/]+)\/actions\/run$/);
   if (request.method === "POST" && portfolioActionMatch) {
     const uid = decodeURIComponent(portfolioActionMatch[1]);
@@ -1869,9 +1284,12 @@ createServer(async (request, response) => {
     const index = portfolioConfigurations.findIndex((configuration) => configuration.uid === uid);
     if (index < 0) return sendJson(response, 404, { detail: "Portfolio configuration not found." });
     if (request.method === "GET") return sendJson(response, 200, portfolioConfigurationDetail(portfolioConfigurations[index]));
+    if (["PATCH", "DELETE"].includes(request.method) && PORTFOLIOS_OF_ANOTHER_OWNER.has(uid)) {
+      return sendJson(response, 403, PORTFOLIO_OWNED_BY_ANOTHER);
+    }
     if (request.method === "PATCH") {
       const body = await readJson(request);
-      const errors = portfolioRequestErrors(body, { partial: true });
+      const errors = portfolioUpdateErrors(body);
       if (errors.length) return sendJson(response, 422, { detail: errors });
       const rebalance = portfolioRebalanceConfigurations.find((candidate) => (
         candidate.uid === (body.rebalance_configuration_uid ?? portfolioConfigurations[index].rebalance_configuration_uid)
@@ -1886,11 +1304,17 @@ createServer(async (request, response) => {
       return sendJson(response, 200, portfolioConfigurations[index]);
     }
     if (request.method === "DELETE") {
+      // Deleting retires the portfolio; its published values stay as its record.
       const [deleted] = portfolioConfigurations.splice(index, 1);
       return sendJson(response, 200, {
         configuration_uid: deleted.uid,
-        job_uid: deleted.job_uid,
         deleted: true,
+        portfolio: {
+          uid: deleted.portfolio_uid,
+          unique_identifier: `ALPACA_PORTFOLIO__${deleted.uid}`,
+          state: deleted.portfolio_uid ? "retired" : "absent",
+          retired_at: deleted.portfolio_uid ? new Date().toISOString() : null,
+        },
       });
     }
   }

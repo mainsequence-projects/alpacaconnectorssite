@@ -38,15 +38,6 @@ const sidebars = {
         },
         {
           "type": "category",
-          "label": "Universes",
-          "link": {
-            "type": "doc",
-            "id": "surfaces/universes"
-          },
-          "items": []
-        },
-        {
-          "type": "category",
           "label": "Bars",
           "link": {
             "type": "doc",
@@ -56,16 +47,7 @@ const sidebars = {
         },
         {
           "type": "category",
-          "label": "Signals",
-          "link": {
-            "type": "doc",
-            "id": "surfaces/signals"
-          },
-          "items": []
-        },
-        {
-          "type": "category",
-          "label": "ETF Portfolios",
+          "label": "Portfolios",
           "link": {
             "type": "doc",
             "id": "surfaces/portfolios"

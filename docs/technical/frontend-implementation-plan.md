@@ -3,7 +3,7 @@
 ## Outcome
 
 Build an embedded Command Center application for the Alpaca Connectors FastAPI service. The site
-must expose its selected asset, account, universe, bars-configuration, and signal-Job workflows, using
+must expose its selected asset, account, bars-configuration, and portfolio workflows, using
 the installed Command Center SDK for embedding, theme, layout, application feedback, resource
 discovery, and action confirmation.
 
@@ -16,15 +16,15 @@ discovery, and action confirmation.
 - Package-owned Command Center skills and authenticated platform skills were synchronized before
   implementation.
 - The backend API tests for the current capability routes pass.
-- The asset-registration operation, relational Asset Universe create/run, and stored bars-configuration
+- The asset-registration operation, account registration, stored bars-configuration, and portfolio
   contracts are the workflows selected for this frontend.
 - Other project capabilities are documented but are not presented as application pages.
 
 ## Architecture decision
 
 Application purpose:
-: Provide one browser control surface for the selected asset, account, universe,
-  bars-configuration, and signal-Job workflows.
+: Provide one browser control surface for the selected asset, account, bars-configuration, and
+  portfolio workflows.
 
 Main Command Center embedding:
 : Use `createStaticSiteIframeClient` on the `mainsequence.alpaca-connectors` channel. Deployed API
@@ -40,23 +40,22 @@ Application documentation:
 : Ship user and technical documentation at `/docs/` in the same `dist/` artifact.
 
 Application-owned routes:
-: Assets, Accounts, Universes, Bars, ETF Weight Signals, Rebalance Configurations, and ETF
-  Portfolios. The three portfolio routes are sibling destinations under the **Portfolios**
-  sub-application group. The root resolves to Assets. Project-wide capability and configuration
+: Assets, Accounts, Bars, Rebalance Configurations, and Portfolios. The two portfolio routes are
+  sibling destinations under the **Portfolios** sub-application group. The root resolves to Assets. Project-wide capability and configuration
   reference belongs in the same-artifact documentation, not in an Overview application route.
 
 Resource collections and details:
-: The Accounts, Universes, Bars, ETF Weight Signals, Rebalance Configurations, and ETF Portfolios
-  routes embed SDK `ResourceListPage` collections backed by their canonical
+: The Accounts, Bars, Rebalance Configurations, and Portfolios routes embed SDK
+  `ResourceListPage` collections backed by their canonical
   list and discovery endpoints. Other future resource pages must use their authoritative collection,
   pagination, discovery, and detail contracts. Do not manufacture adapters from capability
   summaries.
 
 Action placement:
-: Asset plan and execute actions live beside the asset form. Account registration and universe
-  creation are distinct form actions. Account and bars edit/delete operations use row actions and
-  SDK confirmation. Backend-discovered account and universe actions run through SDK preflight,
-  confirmation when required, execution, and refresh.
+: Asset plan and execute actions live beside the asset form. Account registration is a distinct
+  form action. Account and bars edit/delete operations and portfolio run and delete use row actions
+  and SDK confirmation. Backend-discovered account actions run through SDK preflight, confirmation
+  when required, execution, and refresh.
 
 Portable widgets and workspaces:
 : None. These workflows are application routes, not reusable widgets or persisted workspaces.
@@ -68,9 +67,8 @@ Backend adapters and contracts:
   browser never holds a token. Typed response guards keep
   malformed responses out of the UI. The Accounts route sends Alpaca keys only as write-only
   request fields that the API stores as Main Sequence Secrets, and never receives them back. The
-  Universes route accepts an explicit source URL when the universe is created and does not load
-  provider configuration or infer a provider. Its types keep Universe UID, Source UID, and Asset
-  Category UID distinct.
+  Portfolios route never creates a portfolio or gives one weights: those are the application's
+  capabilities.
 
 Selected focused skills:
 : Use Command Center SDK, build Command Center application, integrate static-site iframe, theme
@@ -99,9 +97,8 @@ owned by the root npm toolchain.
 2. Add a development-only direct transport for the local FastAPI server.
 3. Map transport startup and failures to SDK application feedback.
 4. Add one SDK-owned internal navigation panel headed by the Alpaca Connectors logo and label.
-   Keep Assets, Accounts, Universes, and Bars under **Workflows**; group ETF Weight Signals,
-   Rebalance Configurations, and ETF Portfolios under **Portfolios**; and keep Documentation under
-   **Reference**. The embedded
+   Keep Assets, Accounts, and Bars under **Workflows**; group Rebalance Configurations and
+   Portfolios under **Portfolios**; and keep Documentation under **Reference**. The embedded
    child must not reproduce the host Command Center's application rail or application selector.
 
 Exit gate: the app never handles a host session token, all deployed API paths are relative, direct
@@ -109,19 +106,15 @@ production links fail safely without an iframe bridge, and host theme updates re
 
 ### Phase 3 — implemented API workflows
 
-1. Load provider configuration for the workflow forms without rendering a project-state dashboard.
+1. Load the project configuration for the workflow forms without rendering a project-state dashboard.
 2. Add exact-symbol asset-registration planning and execution, including required
    registered-account selection and an inline explanation of validation and execution.
 3. Start asset registration through the persisted operation endpoint, poll its stable UID, and map
    all recorded backend steps to the SDK progress list without inventing percentages.
-4. Add explicit universe creation that persists an empty universe plus its holdings source without
-   performing extraction.
-5. Keep universe execution out of the creation form; expose it as a discovered row action.
-6. Render validation blockers, warnings, created identities, and operation results without exposing
+4. Render validation blockers, warnings, created identities, and operation results without exposing
    unbounded backend traces.
 
-Exit gate: each screen calls only an existing canonical backend route, and universe creation is
-visibly distinct from execution.
+Exit gate: each screen calls only an existing canonical backend route.
 
 ### Phase 4 — documentation and verification
 
@@ -133,22 +126,12 @@ visibly distinct from execution.
 Exit gate: the combined artifact contains `dist/index.html` and `dist/docs/index.html`; automated
 checks pass at phone, tablet, and desktop widths.
 
-### Phase 5 — registered-universe resources
-
-1. Adapt the canonical universe collection and discovery routes with `createHttpResourceAdapter`.
-2. Render server search, ordering, pagination, and refresh through SDK `ResourceListPage`.
-3. Expose run, activate, deactivate, and delete as discovered actions with backend preflight.
-4. Add a row context-menu shortcut that opens the same SDK confirmation flow.
-
-Exit gate: the browser suite proves create, run, deactivate, activate, and delete from the
-registered-universe flow; inactive universes remain registered but are rejected as market-data
-scopes.
-
-### Phase 6 — bars-configuration CRUD
+### Phase 5 — bars-configuration CRUD
 
 1. Adapt `/v1/market-data/bar-configurations` and its discovery contract with the SDK HTTP resource adapter.
-2. Create and edit configurations with a registered Alpaca account, exactly one asset source, and
-   one already-migrated `frequency/feed/adjustment` profile.
+2. Create and edit configurations with a registered Alpaca account, exactly one of the connector's
+   asset sources (explicit assets, latest account holdings, or the assets of the live portfolios
+   that use the prices), and one already-migrated `frequency/feed/adjustment` profile.
 3. List the stored configurations with server search, filtering, ordering, pagination, and refresh.
 4. Delete through an SDK confirmation dialog without implying that published bars observations are removed.
 
@@ -156,7 +139,7 @@ Exit gate: browser coverage proves create, read, update, and delete; the form ex
 holdings use the newest persisted snapshot from the inclusive trailing 30 days and never capture a
 snapshot as a side effect.
 
-### Phase 7 — account-registration CRUD
+### Phase 6 — account-registration CRUD
 
 1. Adapt `/v1/accounts` and `/v1/accounts/discovery` with the SDK HTTP resource adapter.
 2. Collect the Alpaca API key and secret key in password fields with autocomplete off; keep them
@@ -172,22 +155,18 @@ Exit gate: browser coverage proves review, create, update, rotation, and delete 
 request bodies; no request URL carries a key value and no request reaches the Secret-reference
 endpoint.
 
-### Phase 8 — Universe-backed signal Jobs
+### Phase 7 — portfolios built from provided weights
 
-1. Adapt `/v1/signal-jobs` and its discovery contract with the SDK HTTP resource adapter.
-2. Keep the default view as the signal list and open the create/edit form only after an explicit
-   user action.
-3. Select an active Universe, an active registered Alpaca account, schedule, and compute settings.
-   Environment resolution stays internal to the API and current CodeRepositoryBranch.
-4. Expose run, edit, and delete as row actions. Keep schedule enablement in the edit form and keep
-   internal reconciliation out of the user-facing application. Explain that deletion retains prior
-   signal observations.
-5. State clearly that `universe_uid` defines signal identity, `account_uid` is runtime-only, and an
-   observation timestamp is not guaranteed to be the economic effective time of the ETF weights.
+1. Adapt `/v1/portfolio-configurations` and its discovery contract with the SDK HTTP resource
+   adapter, and keep rebalance configurations as a sibling route.
+2. List and inspect portfolios, with their weights summary, valuation source, rebalance policy,
+   shared Job, and value history; run them from a row action.
+3. Offer the owner's actions, pause and resume (`PATCH {scheduled}`) and delete, which retires the
+   portfolio, and read the connector's `403` as "Only the portfolio's owner can do this."
+4. Never create a portfolio or give one weights: those are the application's capabilities.
 
-Exit gate: browser coverage proves create, read, update, run, schedule disablement through edit, and
-delete; it also proves that internal pause, resume, and reconcile controls are absent and that the
-discovery column IDs exactly match every local renderer.
+Exit gate: browser coverage proves inspection, run, pause and resume, delete, and the owner-only
+refusal, and that the portfolio pages send no create or edit request.
 
 ## Runtime configuration
 
@@ -204,7 +183,7 @@ credential.
 | Concern | Proof |
 | --- | --- |
 | SDK guidance | SDK status is current and both skill sentinels record successful synchronization |
-| API fidelity | Frontend endpoint constants match the current FastAPI routers; browser tests cover asset-registration polling, account CRUD, universe creation and lifecycle, bars-configuration CRUD, and signal Job lifecycle; backend API tests pass |
+| API fidelity | Frontend endpoint constants match the current FastAPI routers; browser tests cover asset-registration polling, account CRUD, bars-configuration CRUD, rebalance CRUD, and portfolio inspection, runs, and owner actions, and that the pages call only those routes; backend API tests pass |
 | Embed security | SDK client owns credential acquisition; only relative deployed paths are accepted |
 | Theme | SDK theme audit passes and host theme updates reach rendered controls and surfaces |
 | Layout | SDK browser geometry verifier passes at 375, 768, and 1280 pixel widths |
@@ -219,14 +198,18 @@ See [Deployment](deployment.md) for the release contract and verification bounda
 
 ## Implementation result
 
-Phases 1 through 8 are complete in this repository. The SDK remained current at `0.1.18`; package
+Phases 1 through 7 are complete in this repository. The SDK remained current at `0.1.18`; package
 and authenticated platform skills were synchronized; the application and same-artifact
 documentation were built; and automated checks covered theme conformance, TypeScript,
 documentation, responsive layout, direct development requests, delegated iframe requests, plan
-gating, account CRUD by Secret reference, registered-universe resource management,
-bars-configuration CRUD, signal Job CRUD and lifecycle, durable ETF Portfolio and Rebalance
-Configuration CRUD, portfolio Job execution, host theme updates, and production
-documentation routes.
+gating, account CRUD by Secret reference, bars-configuration CRUD, Rebalance Configuration CRUD,
+portfolio inspection, runs, and owner actions, host theme updates, and production documentation
+routes.
+
+On 2026-11-17 the connector kept only portfolios built from weights an application provides and
+stopped building portfolios from holdings sources. The site removed the pages, navigation, and API
+calls of those holdings-sourced workflows and the bars configurations' holdings-collection source,
+and its Portfolios page lists, inspects, and runs portfolios built from provided weights.
 
 Holdings snapshots, market-data datasets and observations, portfolio output observations, and other SDK resource views are
 not current site pages and require an explicit frontend scope plus verification against their

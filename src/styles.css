@@ -233,50 +233,6 @@ a {
   gap: 0.4rem;
 }
 
-.signal-observations {
-  display: grid;
-  gap: var(--application-card-grid-gap);
-  min-width: 0;
-}
-
-.signal-observations__heading h2,
-.signal-observations__heading p,
-.signal-observations__note {
-  margin: 0;
-}
-
-.signal-observations__heading p,
-.signal-observations__note {
-  color: var(--muted-foreground);
-}
-
-.signal-observations__table {
-  height: min(42rem, 70vh);
-  min-height: 24rem;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--background);
-}
-
-.signal-observations__table > .cc-data-table__scroller {
-  height: 100%;
-  overflow: auto;
-}
-
-.signal-observations__table .cc-data-table th:first-child,
-.signal-observations__table .cc-data-table td:first-child {
-  position: sticky;
-  left: 0;
-  z-index: 2;
-  min-width: 14rem;
-  background: var(--background);
-}
-
-.signal-observations__table .cc-data-table th:first-child {
-  z-index: 3;
-}
-
 .portfolio-detail-stack {
   display: grid;
   gap: var(--application-section-gap);
@@ -859,10 +815,6 @@ a {
   margin: 0;
   color: var(--danger);
   font-size: var(--font-size-body-sm);
-}
-
-.universe-resource-list {
-  position: relative;
 }
 
 .summary-list {

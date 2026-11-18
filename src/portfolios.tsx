@@ -35,14 +35,13 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   API_ENDPOINTS,
+  ApiResponseError,
   createApiClient,
   formatSharedJobSchedule,
   US_EQUITY_REBALANCE_CALENDAR,
   type ApiTransport,
-  type BarConfiguration,
   type PortfolioConfiguration,
   type PortfolioConfigurationDetail,
-  type PortfolioConfigurationWriteRequest,
   type PortfolioJobRunAccepted,
   type PortfolioValueObservation,
   type PortfolioRebalanceCadence,
@@ -52,7 +51,6 @@ import {
   type PortfolioRebalanceEvent,
   type PortfolioRebalanceStrategy,
   type ResourceCollection,
-  type SignalJobConfiguration,
 } from "./api";
 import { RequestErrorDialog, RequestProgressDialog } from "./requestFeedback";
 
@@ -64,9 +62,6 @@ type MutationState =
 
 type PortfolioSection = "portfolios" | "rebalances";
 
-const DEFAULT_COMMISSION_PERCENTAGE = "0.018";
-/** The connector's default maximum valuation staleness: one day. */
-const DEFAULT_VALUATION_MAXIMUM_STALENESS_SECONDS = "86400";
 const PORTFOLIO_OBSERVATION_LIMIT = 2_500;
 const REBALANCE_STRATEGY_LABEL = "CalendarEventSignal";
 const WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
@@ -298,6 +293,15 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : "The request failed unexpectedly.";
 }
 
+/**
+ * Pausing, resuming, and deleting a portfolio are its owner's: the API answers anyone else 403,
+ * and the site says so in the person's words rather than the API's.
+ */
+function formatOwnerActionError(error: unknown): string {
+  if (error instanceof ApiResponseError && error.status === 403) return "Only the portfolio's owner can do this.";
+  return formatError(error);
+}
+
 function withQuery(path: string, query?: Readonly<Record<string, unknown>>): string {
   const parameters = new URLSearchParams();
   Object.entries(query ?? {}).forEach(([key, value]) => {
@@ -336,7 +340,6 @@ function buildPortfolioResource(transport: ApiTransport) {
       limit: pageSize,
       offset: pageIndex * pageSize,
       search,
-      signal_configuration_uid: filters?.signal_configuration_uid,
       bars_configuration_uid: filters?.bars_configuration_uid,
       ordering: sort?.[0]
         ? `${sort[0].direction === "descending" ? "-" : ""}${sort[0].key}`
@@ -346,10 +349,10 @@ function buildPortfolioResource(transport: ApiTransport) {
   });
 
   return defineResourceApplication({
-    id: "alpaca-etf-portfolio-configurations",
-    label: "ETF Portfolios",
-    itemLabel: "portfolio configuration",
-    description: "Durable analytical portfolios composed from ETF weight signals, Alpaca bars, and CalendarEventSignal rebalance configurations.",
+    id: "alpaca-portfolio-configurations",
+    label: "Portfolios",
+    itemLabel: "portfolio",
+    description: "Durable analytical portfolios built from weights an application provides, valued with Alpaca bars and rebalanced by CalendarEventSignal rebalance configurations.",
     getId: (configuration: PortfolioConfiguration) => configuration.uid,
     adapter,
     columns: [
@@ -440,7 +443,7 @@ function buildRebalanceResource(transport: ApiTransport) {
     id: "portfolio-rebalance-configurations",
     label: "Rebalance Configurations",
     itemLabel: "rebalance configuration",
-    description: "Reusable calendar-event rebalance policies: the latest observed ETF weights execute at selected NYSE session events.",
+    description: "Reusable calendar-event rebalance policies: a portfolio's latest weights execute at selected NYSE session events.",
     getId: (configuration: PortfolioRebalanceConfiguration) => configuration.uid,
     adapter,
     columns: [
@@ -682,7 +685,7 @@ function PortfolioDetail({
       setRetryRevision((value) => value + 1);
       onChanged();
     } catch (requestError) {
-      setScheduleError(formatError(requestError));
+      setScheduleError(formatOwnerActionError(requestError));
     } finally {
       setSchedulePending(false);
     }
@@ -696,7 +699,7 @@ function PortfolioDetail({
     <ResourceDetailShell<PortfolioConfigurationDetail>
       embedded
       breadcrumbs={[
-        { id: "portfolios", label: "ETF Portfolios", onSelect: onBack },
+        { id: "portfolios", label: "Portfolios", onSelect: onBack },
         { id: configuration.uid, label: configuration.name },
       ]}
       loading={loading}
@@ -727,7 +730,7 @@ function PortfolioDetail({
           summary={{
             entity: {
               id: configuration.uid,
-              type: "Analytical ETF portfolio",
+              type: "Analytical portfolio",
               title: resolved.name,
             },
             badges: [
@@ -739,7 +742,7 @@ function PortfolioDetail({
               },
             ],
             inline_fields: [
-              { key: "signal", label: "Signal", value: detail?.linked_signal.name ?? "Loading" },
+              { key: "weights", label: "Weights", value: detail ? "Provided by an application" : "Loading" },
               { key: "bars", label: "Valuation source", value: detail?.linked_bars.name ?? "Loading" },
               { key: "scheduled", label: "Scheduled run", value: resolved.scheduled ? "Included" : "Paused" },
               { key: "schedule", label: "Shared Job schedule", value: formatSharedJobSchedule(resolved.job) },
@@ -834,18 +837,18 @@ function PortfolioDetail({
               <summary className="portfolio-detail-panel__summary">
                 <span>
                   <h2>Portfolio construction</h2>
-                  <p>Signal lineage and rebalance policy</p>
+                  <p>Weights and rebalance policy</p>
                 </span>
-                <span className="portfolio-detail-panel__hint">Signal + rebalance</span>
+                <span className="portfolio-detail-panel__hint">Weights + rebalance</span>
               </summary>
               <div className="portfolio-detail-panel__content">
                 <section className="portfolio-detail-subpanel">
-                  <h3>Signal</h3>
+                  <h3>Weights</h3>
                   <dl className="portfolio-detail-tree">
-                    <div><dt>Signal</dt><dd>{detail.linked_signal.name}</dd></div>
-                    <div><dt>Signal description</dt><dd>{detail.linked_signal.description ?? "No description"}</dd></div>
-                    <div><dt>Universe</dt><dd>{detail.linked_signal.universe_name} ({detail.linked_signal.universe_symbol})</dd></div>
-                    <div><dt>Signal runtime account</dt><dd>{detail.linked_signal.account_name} · {formatEnvironment(detail.linked_signal.account_environment)}</dd></div>
+                    <div><dt>Weights</dt><dd>Provided by an application</dd></div>
+                    <div><dt>Assets</dt><dd>{detail.provided_weights?.asset_count ?? "Unavailable"}</dd></div>
+                    <div><dt>First weights</dt><dd>{formatDateTime(detail.provided_weights?.first_observation_at ?? null)}</dd></div>
+                    <div><dt>Latest weights</dt><dd>{formatDateTime(detail.provided_weights?.last_observation_at ?? null)}</dd></div>
                   </dl>
                 </section>
                 <section className="portfolio-detail-subpanel">
@@ -930,7 +933,7 @@ function PortfolioDetail({
 
           <aside className="workflow-guidance" aria-label="Portfolio analytical limitation">
             <Info aria-hidden="true" size={18} />
-            <p>This is an analytical calendar-executed reconstruction. At each configured session event it applies the latest ETF weights observed at or before that event; it does not claim perfect point-in-time holdings or model execution latency, fills, impact, or slippage beyond the configured commission fee.</p>
+            <p>This is an analytical calendar-executed reconstruction. At each configured session event it applies the latest weights given at or before that event; it does not model execution latency, fills, impact, or slippage beyond the configured commission fee.</p>
           </aside>
         </div>
       ) : null}
@@ -949,24 +952,7 @@ export function PortfoliosPage({
   const portfolioDefinition = useMemo(() => buildPortfolioResource(transport), [transport]);
   const rebalanceDefinition = useMemo(() => buildRebalanceResource(transport), [transport]);
   const manageRebalances = section === "rebalances";
-  const [portfolioFormOpen, setPortfolioFormOpen] = useState(false);
-  const [editingPortfolio, setEditingPortfolio] = useState<PortfolioConfiguration | null>(null);
   const [selectedPortfolio, setSelectedPortfolio] = useState<PortfolioConfiguration | null>(null);
-  const [signals, setSignals] = useState<SignalJobConfiguration[]>([]);
-  const [bars, setBars] = useState<BarConfiguration[]>([]);
-  const [rebalances, setRebalances] = useState<PortfolioRebalanceConfiguration[]>([]);
-  const [dependenciesLoading, setDependenciesLoading] = useState(false);
-  const [dependenciesError, setDependenciesError] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [signalConfigurationUid, setSignalConfigurationUid] = useState("");
-  const [barsConfigurationUid, setBarsConfigurationUid] = useState("");
-  const [rebalanceConfigurationUid, setRebalanceConfigurationUid] = useState("");
-  const [valuationColumn, setValuationColumn] = useState("close");
-  const [maximumStalenessSeconds, setMaximumStalenessSeconds] = useState(DEFAULT_VALUATION_MAXIMUM_STALENESS_SECONDS);
-  const [failOnMissingPrices, setFailOnMissingPrices] = useState(true);
-  const [commissionPercentage, setCommissionPercentage] = useState(DEFAULT_COMMISSION_PERCENTAGE);
-  const [scheduled, setScheduled] = useState(true);
   const [mutation, setMutation] = useState<MutationState>({ state: "idle" });
   const [portfolioRefreshKey, setPortfolioRefreshKey] = useState(0);
   const [rebalanceRefreshKey, setRebalanceRefreshKey] = useState(0);
@@ -993,146 +979,7 @@ export function PortfoliosPage({
     setRebalanceDraft((current) => ({ ...current, ...changes }));
   }
 
-  useEffect(() => {
-    if (!portfolioFormOpen) return;
-    const controller = new AbortController();
-    setDependenciesLoading(true);
-    setDependenciesError(null);
-    Promise.all([
-      api.get<ResourceCollection<SignalJobConfiguration>>(`${API_ENDPOINTS.signalJobs}?limit=100&offset=0&scheduled=true&ordering=name`, controller.signal),
-      api.get<ResourceCollection<BarConfiguration>>(`${API_ENDPOINTS.barConfigurations}?limit=100&offset=0&enabled=true&ordering=name`, controller.signal),
-      api.get<ResourceCollection<PortfolioRebalanceConfiguration>>(`${API_ENDPOINTS.portfolioRebalanceConfigurations}?limit=100&offset=0&ordering=name`, controller.signal),
-    ])
-      .then(([signalResponse, barsResponse, rebalanceResponse]) => {
-        setSignals(signalResponse.items);
-        setBars(barsResponse.items.filter((item) => item.enabled));
-        setRebalances(rebalanceResponse.items);
-        setSignalConfigurationUid((current) => current || signalResponse.items[0]?.uid || "");
-        setBarsConfigurationUid((current) => current || barsResponse.items.find((item) => item.enabled)?.uid || "");
-        setRebalanceConfigurationUid((current) => current || rebalanceResponse.items[0]?.uid || "");
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) setDependenciesError(formatError(error));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setDependenciesLoading(false);
-      });
-    return () => controller.abort();
-  }, [api, portfolioFormOpen, rebalanceRefreshKey]);
-
-  const signalOptions = useMemo<ResourcePickerOption[]>(() => signals.map((signal) => ({
-    value: signal.uid,
-    label: signal.name,
-    subtitle: signal.signal_uid,
-  })), [signals]);
-  const barsOptions = useMemo<ResourcePickerOption[]>(() => bars.map((configuration) => ({
-    value: configuration.uid,
-    label: configuration.name,
-    subtitle: `${configuration.frequency_id}/${configuration.feed}/${configuration.adjustment}`,
-  })), [bars]);
-  const rebalanceOptions = useMemo<ResourcePickerOption[]>(() => rebalances.map((configuration) => ({
-    value: configuration.uid,
-    label: configuration.name,
-    subtitle: [
-      configuration.calendar_identifier,
-      formatRebalanceEvent(configuration.rebalance_event, configuration.event_offset_seconds),
-      formatRebalanceCadence(configuration.rebalance_cadence, configuration.rebalance_weekday),
-    ].join(" · "),
-  })), [rebalances]);
-  const parsedCommissionPercentage = Number(commissionPercentage);
-  const commissionValid = commissionPercentage.trim() !== ""
-    && Number.isFinite(parsedCommissionPercentage)
-    && parsedCommissionPercentage >= 0;
-  const parsedMaximumStalenessSeconds = parseWholeSeconds(maximumStalenessSeconds);
-  const maximumStalenessValid = parsedMaximumStalenessSeconds !== null && parsedMaximumStalenessSeconds > 0;
   const busy = mutation.state === "loading";
-  const canSubmit = Boolean(
-    name.trim()
-    && signalConfigurationUid
-    && barsConfigurationUid
-    && rebalanceConfigurationUid
-    && valuationColumn.trim()
-    && commissionValid
-    && maximumStalenessValid
-    && !busy
-    && !dependenciesLoading
-    && !dependenciesError,
-  );
-
-  function resetPortfolioForm() {
-    setEditingPortfolio(null);
-    setName("");
-    setDescription("");
-    setSignalConfigurationUid("");
-    setBarsConfigurationUid("");
-    setRebalanceConfigurationUid("");
-    setValuationColumn("close");
-    setMaximumStalenessSeconds(DEFAULT_VALUATION_MAXIMUM_STALENESS_SECONDS);
-    setFailOnMissingPrices(true);
-    setCommissionPercentage(DEFAULT_COMMISSION_PERCENTAGE);
-    setScheduled(true);
-  }
-
-  function openCreatePortfolio() {
-    resetPortfolioForm();
-    setPortfolioFormOpen(true);
-    setMutation({ state: "idle" });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  function openEditPortfolio(item: PortfolioConfiguration) {
-    setEditingPortfolio(item);
-    setName(item.name);
-    setDescription(item.description ?? "");
-    setSignalConfigurationUid(item.signal_configuration_uid);
-    setBarsConfigurationUid(item.bars_configuration_uid);
-    setRebalanceConfigurationUid(item.rebalance_configuration_uid);
-    setValuationColumn(item.valuation_column);
-    setMaximumStalenessSeconds(String(item.valuation_maximum_staleness_seconds));
-    setFailOnMissingPrices(item.fail_on_missing_prices);
-    setCommissionPercentage(formatCommissionPercentage(item.commission_fee));
-    setScheduled(item.scheduled);
-    setPortfolioFormOpen(true);
-    setMutation({ state: "idle" });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  async function submitPortfolio(event: FormEvent) {
-    event.preventDefault();
-    if (!canSubmit || parsedMaximumStalenessSeconds === null) {
-      setMutation({ state: "error", message: "Complete the signal, bars, rebalance, and calculation fields." });
-      return;
-    }
-    const request: PortfolioConfigurationWriteRequest = {
-      name: name.trim(),
-      description: description.trim() || null,
-      signal_configuration_uid: signalConfigurationUid,
-      bars_configuration_uid: barsConfigurationUid,
-      rebalance_configuration_uid: rebalanceConfigurationUid,
-      upsample_frequency_id: "1d",
-      intraday_bar_interpolation_rule: "ffill",
-      valuation_column: valuationColumn.trim(),
-      valuation_maximum_staleness_seconds: parsedMaximumStalenessSeconds,
-      fail_on_missing_prices: failOnMissingPrices,
-      commission_fee: parsedCommissionPercentage / 100,
-      scheduled,
-    };
-    setMutation({ state: "loading", label: editingPortfolio ? "Updating portfolio" : "Creating portfolio" });
-    try {
-      if (editingPortfolio) {
-        await api.patch<PortfolioConfiguration>(`${API_ENDPOINTS.portfolioConfigurations}/${encodeURIComponent(editingPortfolio.uid)}`, request);
-      } else {
-        await api.post<PortfolioConfiguration>(API_ENDPOINTS.portfolioConfigurations, request);
-      }
-      const message = `${editingPortfolio ? "Updated" : "Created"} ${request.name}.`;
-      resetPortfolioForm();
-      setPortfolioFormOpen(false);
-      setMutation({ state: "success", message });
-      setPortfolioRefreshKey((current) => current + 1);
-    } catch (error) {
-      setMutation({ state: "error", message: formatError(error) });
-    }
-  }
 
   async function runPortfolio(item: PortfolioConfiguration) {
     setMutation({ state: "loading", label: `Starting ${item.name}` });
@@ -1187,7 +1034,7 @@ export function PortfoliosPage({
     try {
       if (deletePortfolioTarget) {
         await api.delete(`${API_ENDPOINTS.portfolioConfigurations}/${encodeURIComponent(deletePortfolioTarget.uid)}`);
-        setMutation({ state: "success", message: `Deleted ${deletePortfolioTarget.name}. Published portfolio observations were retained.` });
+        setMutation({ state: "success", message: `Deleted ${deletePortfolioTarget.name}. The portfolio is retired; its published values were retained.` });
         setDeletePortfolioTarget(null);
         setPortfolioRefreshKey((current) => current + 1);
       } else if (deleteRebalanceTarget) {
@@ -1198,18 +1045,14 @@ export function PortfoliosPage({
       }
       setDeleteConfirmation("");
     } catch (error) {
-      setDeleteError(formatError(error));
+      setDeleteError(deletePortfolioTarget ? formatOwnerActionError(error) : formatError(error));
     } finally {
       setDeletePending(false);
     }
   }
 
-  const portfolioPrimaryActions = useMemo(() => [
-    { id: "create-portfolio", label: "Create portfolio", tone: "primary" as const, disabled: portfolioFormOpen, onSelect: openCreatePortfolio },
-  ], [portfolioFormOpen]);
   const portfolioRowActions = useMemo<readonly ResourceRowAction<PortfolioConfiguration>[]>(() => [
     { id: "run-portfolio", label: "Run now", disabled: (item) => item.job?.image_status !== "ready", onSelect: (item) => void runPortfolio(item) },
-    { id: "edit-portfolio", label: "Edit", onSelect: openEditPortfolio },
     { id: "delete-portfolio", label: "Delete", tone: "danger", onSelect: setDeletePortfolioTarget },
   ], []);
   const rebalancePrimaryActions = useMemo(() => [
@@ -1225,106 +1068,11 @@ export function PortfoliosPage({
       <ApplicationPageStack>
         <ApplicationPageHeader
           eyebrow="Portfolios"
-          title={manageRebalances ? "Rebalance Configurations" : "ETF Portfolios"}
+          title={manageRebalances ? "Rebalance Configurations" : "Portfolios"}
           description={manageRebalances
-            ? "Maintain reusable CalendarEventSignal policies that execute the latest observed ETF weights at selected NYSE session events."
-            : "Compose an existing ETF weight Signal, an Alpaca Bars Configuration, persistent interpolated prices, and a CalendarEventSignal rebalance policy. The shared portfolio Job declared in the connector's workflow runs every Portfolio Configuration."}
+            ? "Maintain reusable CalendarEventSignal policies that execute a portfolio's latest weights at selected NYSE session events."
+            : "Portfolios built from weights an application provides; the application creates them and gives them their weights. The shared portfolio Job declared in the connector's workflow runs every portfolio. Inspect and run them here; a portfolio's owner can also pause, resume, or delete it."}
         />
-
-        {portfolioFormOpen && !manageRebalances ? (
-          <ApplicationCard header={<h2>{editingPortfolio ? "Edit portfolio" : "Create portfolio"}</h2>}>
-            <form className="workflow-form" onSubmit={submitPortfolio}>
-              <section className="workflow-form-section">
-                <div className="workflow-form-section__header">
-                  <h3>Portfolio calculation</h3>
-                  <p>References are resolved at runtime. Universe, account, raw bars table UID, schedule, and compute fields are not copied into the Portfolio Configuration.</p>
-                </div>
-                <div className="form-grid">
-                  <label className="field">Portfolio name<input value={name} onChange={(event) => setName(event.target.value)} disabled={busy} placeholder="Daily IVV analytical portfolio" /></label>
-                  <label className="field field--wide">Description <span>Optional</span><textarea rows={2} value={description} onChange={(event) => setDescription(event.target.value)} disabled={busy} /></label>
-                  <div className="field resource-picker-field">
-                    <label id="portfolio-signal-label">ETF weight Signal</label>
-                    <ResourcePicker ariaLabelledBy="portfolio-signal-label" disabled={busy || dependenciesLoading} emptyMessage="No scheduled ETF weight Signals." fullWidth loading={dependenciesLoading} mode="single" onValueChange={setSignalConfigurationUid} options={signalOptions} placeholder="Select an ETF weight Signal" searchable searchPlaceholder="Search Signals" value={signalConfigurationUid || null} />
-                  </div>
-                  <div className="field resource-picker-field">
-                    <label id="portfolio-bars-label">Alpaca Bars Configuration</label>
-                    <ResourcePicker ariaLabelledBy="portfolio-bars-label" disabled={busy || dependenciesLoading} emptyMessage="No enabled Bars Configurations." fullWidth loading={dependenciesLoading} mode="single" onValueChange={setBarsConfigurationUid} options={barsOptions} placeholder="Select a Bars Configuration" searchable searchPlaceholder="Search Bars Configurations" value={barsConfigurationUid || null} />
-                  </div>
-                  <div className="field resource-picker-field">
-                    <label id="portfolio-rebalance-label">Rebalance Configuration</label>
-                    <ResourcePicker ariaLabelledBy="portfolio-rebalance-label" disabled={busy || dependenciesLoading} emptyMessage="No Rebalance Configurations. Create one from the list action." fullWidth loading={dependenciesLoading} mode="single" onValueChange={setRebalanceConfigurationUid} options={rebalanceOptions} placeholder="Select a Rebalance Configuration" searchable searchPlaceholder="Search Rebalance Configurations" value={rebalanceConfigurationUid || null} />
-                  </div>
-                  <label className="field">Valuation column<input value={valuationColumn} onChange={(event) => setValuationColumn(event.target.value)} disabled={busy} /></label>
-                  <div className="field">
-                    <label htmlFor="portfolio-commission-percentage">Commission fee (%)</label>
-                    <div className="field-input-with-unit">
-                      <input
-                        id="portfolio-commission-percentage"
-                        type="number"
-                        min={0}
-                        step="0.001"
-                        value={commissionPercentage}
-                        onChange={(event) => setCommissionPercentage(event.target.value)}
-                        disabled={busy}
-                        aria-describedby="portfolio-commission-percentage-help"
-                      />
-                      <span className="field-input-with-unit__unit" aria-hidden="true">%</span>
-                    </div>
-                    <small id="portfolio-commission-percentage-help" className="field-help">Enter percentage points. For example, 0.018% is stored and submitted as 0.00018.</small>
-                  </div>
-                  <div className="field">
-                    <label htmlFor="portfolio-maximum-staleness">Maximum price staleness (seconds)</label>
-                    <div className="field-input-with-unit">
-                      <input
-                        id="portfolio-maximum-staleness"
-                        type="number"
-                        min={1}
-                        step={1}
-                        value={maximumStalenessSeconds}
-                        onChange={(event) => setMaximumStalenessSeconds(event.target.value)}
-                        disabled={busy}
-                        aria-describedby="portfolio-maximum-staleness-help"
-                        aria-invalid={!maximumStalenessValid}
-                      />
-                      <span className="field-input-with-unit__unit" aria-hidden="true">s</span>
-                    </div>
-                    <small id="portfolio-maximum-staleness-help" className="field-help">
-                      {maximumStalenessValid && parsedMaximumStalenessSeconds !== null
-                        ? `A price may be up to ${formatDuration(parsedMaximumStalenessSeconds)} old at a real rebalance or valuation timestamp.`
-                        : "Enter a whole number of seconds greater than zero; 86400 is one day."}
-                    </small>
-                  </div>
-                </div>
-                <fieldset className="policy-fieldset">
-                  <legend>Valuation alignment</legend>
-                  <label className="policy-option">
-                    <input
-                      type="checkbox"
-                      checked={failOnMissingPrices}
-                      onChange={(event) => setFailOnMissingPrices(event.target.checked)}
-                      disabled={busy}
-                      aria-labelledby="portfolio-missing-prices-label"
-                      aria-describedby="portfolio-missing-prices-help"
-                    />
-                    <span className="policy-option__copy">
-                      <strong id="portfolio-missing-prices-label">Stop when a required asset has no price</strong>
-                      <small id="portfolio-missing-prices-help">An asset is required when the portfolio holds it, enters it, or exits it. If it has no price at or before a valuation timestamp within the maximum staleness, the run stops and reports it. Leave this off to attempt the valuation without that price; no price is invented, and the run may still fail if no usable valuation remains.</small>
-                    </span>
-                  </label>
-                  <p className="policy-fieldset__note"><strong>Bounded alignment:</strong> valuation uses the latest price at or before each real portfolio timestamp, no older than the maximum staleness. It never creates timestamps, extends the portfolio to the current time, or changes signal validity.</p>
-                </fieldset>
-              </section>
-
-              <section className="workflow-form-section" aria-labelledby="portfolio-scheduled-run-heading">
-                <div className="workflow-form-section__header"><h3 id="portfolio-scheduled-run-heading">Scheduled run</h3><p>The shared portfolio Job declared in the connector&apos;s workflow runs every scheduled portfolio once a day; its schedule and resources are shown on the portfolio&apos;s details page. A portfolio left out can still be run manually.</p></div>
-                <label className="checkbox-field"><input type="checkbox" checked={scheduled} onChange={(event) => setScheduled(event.target.checked)} disabled={busy} />Include in the shared portfolio Job&apos;s daily scheduled run</label>
-              </section>
-              {dependenciesError ? <p className="form-error" role="alert">{dependenciesError}</p> : null}
-              <aside className="workflow-guidance" aria-label="Portfolio calculation notes"><Info aria-hidden="true" size={18} /><p>Valuation uses a persistent daily <strong>InterpolatedPrices</strong> dependency with forward-fill interpolation for source-bar gaps. The selected Rebalance Configuration executes the latest observed weights through <strong>CalendarEventSignal</strong> at its session events. Signal timestamps record observation time and do not guarantee exact economic effective time.</p></aside>
-              <div className="form-actions"><button className="button button--primary" type="submit" disabled={!canSubmit}>{editingPortfolio ? "Save changes" : "Create portfolio"}</button><button className="button button--secondary" type="button" onClick={() => { resetPortfolioForm(); setPortfolioFormOpen(false); }} disabled={busy}>Cancel</button></div>
-            </form>
-          </ApplicationCard>
-        ) : null}
 
         {rebalanceFormOpen && manageRebalances ? (
           <ApplicationCard header={<h2>{editingRebalance ? "Edit rebalance configuration" : "Create rebalance configuration"}</h2>}>
@@ -1404,7 +1152,7 @@ export function PortfoliosPage({
               ) : (
                 <p className="form-error" role="alert">Enter the event offset as a whole number of seconds.</p>
               )}
-              <div className="workflow-guidance"><Info aria-hidden="true" size={18} /><p>CalendarEventSignal executes, at each selected session event, the latest ETF weights observed at or before it. A signal observed after the event first becomes eligible at the next one. It does not model execution delay, partial fills, volume participation, market impact, or slippage beyond the portfolio commission fee.</p></div>
+              <div className="workflow-guidance"><Info aria-hidden="true" size={18} /><p>CalendarEventSignal executes, at each selected session event, the portfolio's latest weights given at or before it. Weights given after the event first become eligible at the next one. It does not model execution delay, partial fills, volume participation, market impact, or slippage beyond the portfolio commission fee.</p></div>
               <div className="form-actions"><button className="button button--primary" type="submit" disabled={!rebalanceRequest || busy}>{editingRebalance ? "Save changes" : "Create configuration"}</button><button className="button button--secondary" type="button" onClick={() => setRebalanceFormOpen(false)} disabled={busy}>Cancel</button></div>
             </form>
           </ApplicationCard>
@@ -1423,7 +1171,7 @@ export function PortfoliosPage({
             open
             title={manageRebalances
               ? "Rebalance configuration request failed"
-              : "ETF portfolio request failed"}
+              : "Portfolio request failed"}
             message={mutation.message}
             onClose={() => setMutation({ state: "idle" })}
           />
@@ -1436,17 +1184,17 @@ export function PortfoliosPage({
         ) : selectedPortfolio ? (
           <PortfolioDetail configuration={selectedPortfolio} transport={transport} onBack={() => setSelectedPortfolio(null)} onChanged={() => setPortfolioRefreshKey((current) => current + 1)} />
         ) : (
-          <ResourceListPage definition={portfolioDefinition} embedded pageSize={25} primaryActions={portfolioPrimaryActions} onRowActivate={setSelectedPortfolio} refreshable refreshKey={portfolioRefreshKey} rowActions={portfolioRowActions} searchPlaceholder="Search ETF Portfolios" />
+          <ResourceListPage definition={portfolioDefinition} embedded pageSize={25} onRowActivate={setSelectedPortfolio} refreshable refreshKey={portfolioRefreshKey} rowActions={portfolioRowActions} searchPlaceholder="Search portfolios" />
         )}
       </ApplicationPageStack>
 
       <ResourceActionConfirmationDialog
         open={deletePortfolioTarget !== null || deleteRebalanceTarget !== null}
         actionLabel="Delete"
-        title={deletePortfolioTarget ? "Delete portfolio configuration" : "Delete rebalance configuration"}
+        title={deletePortfolioTarget ? "Delete portfolio" : "Delete rebalance configuration"}
         selectionLabel={deletePortfolioTarget?.name ?? deleteRebalanceTarget?.name ?? "configuration"}
-        description={deletePortfolioTarget ? "Delete this durable Portfolio Configuration. The shared portfolio Job and its past runs remain." : "Delete this reusable Rebalance Configuration."}
-        warning={deletePortfolioTarget ? "Published portfolio values and weights are retained." : "Deletion is blocked while a Portfolio Configuration still references this row."}
+        description={deletePortfolioTarget ? "Delete this portfolio. It is retired, not erased: it stops running, and its published values and weights remain as its record. Only the portfolio's owner can delete it." : "Delete this reusable Rebalance Configuration."}
+        warning={deletePortfolioTarget ? "An account whose target still holds this portfolio must drop it first." : "Deletion is blocked while a Portfolio Configuration still references this row."}
         confirmationWord="DELETE"
         confirmationValue={deleteConfirmation}
         onConfirmationValueChange={setDeleteConfirmation}
