@@ -527,6 +527,20 @@ export interface PortfolioConfiguration {
   updated_at: string;
 }
 
+/**
+ * `DELETE /v1/portfolio-configurations/{uid}`: the Portfolio is retired, the configuration and its
+ * own bars configuration deleted, and the signal definition it followed deleted once no other
+ * portfolio follows it (connector issue #38). `failed`: the portfolio is deleted but the
+ * definition's own delete did not complete. Both are null for a portfolio not yet adopted.
+ */
+export interface PortfolioDeleteResponse {
+  configuration_uid: string;
+  deleted: boolean;
+  portfolio: { uid: string | null; unique_identifier: string; state: "retired" | "absent"; retired_at: string | null };
+  signal_definition?: { uid: string; state: "deleted" | "followed" | "failed" } | null;
+  signal?: { uid: string; state: "deleted" | "kept" } | null;
+}
+
 export interface PortfolioLinkedBars {
   name: string;
   description: string | null;

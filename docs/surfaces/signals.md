@@ -26,7 +26,8 @@ Both are the account owner's; the connector refuses anyone else, and the page sh
 **Rename** changes the name and description and sends only the fields that changed
 (`PATCH /v1/signal-definitions/{uid}`). The application key never changes.
 
-**Delete** is offered only while no portfolio follows the signal; the connector refuses it with
+Deleting the last portfolio that follows a signal deletes the signal with it. **Delete** here is for
+a signal no portfolio follows, such as one no portfolio ever followed; the connector refuses it with
 `409 signal_followed` otherwise. Type `DELETE` to delete the signal and its published weights. When
 a retired portfolio still follows the signal, its weights stay as that portfolio's record, and the
 result says so. Deleting the account deletes all of its signals

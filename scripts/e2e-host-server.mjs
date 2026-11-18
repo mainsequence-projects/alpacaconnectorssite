@@ -1728,10 +1728,21 @@ createServer(async (request, response) => {
       return sendJson(response, 200, portfolioConfigurations[index]);
     }
     if (request.method === "DELETE") {
-      // Deleting retires the portfolio; its published values stay as its record, and its own bars
-      // configuration goes with it.
+      // Deleting retires the portfolio; its published values stay as its record, its own bars
+      // configuration goes with it, and so does its signal definition once no other portfolio
+      // follows it (connector issue #38).
       const [deleted] = portfolioConfigurations.splice(index, 1);
       barConfigurations = barConfigurations.filter((item) => item.portfolio_configuration_uid !== deleted.uid);
+      let signalDefinition = null;
+      let signal = null;
+      if (deleted.signal_definition_uid) {
+        const followed = portfolioConfigurations.some((item) => item.signal_definition_uid === deleted.signal_definition_uid);
+        signalDefinition = { uid: deleted.signal_definition_uid, state: followed ? "followed" : "deleted" };
+        if (!followed) {
+          signalDefinitions = signalDefinitions.filter((item) => item.uid !== deleted.signal_definition_uid);
+          signal = { uid: deleted.signal_uid, state: deleted.portfolio_uid ? "kept" : "deleted" };
+        }
+      }
       return sendJson(response, 200, {
         configuration_uid: deleted.uid,
         deleted: true,
@@ -1741,6 +1752,8 @@ createServer(async (request, response) => {
           state: deleted.portfolio_uid ? "retired" : "absent",
           retired_at: deleted.portfolio_uid ? new Date().toISOString() : null,
         },
+        signal_definition: signalDefinition,
+        signal,
       });
     }
   }

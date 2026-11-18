@@ -933,7 +933,7 @@ test("runs and deletes portfolios built from provided weights and never creates 
   await dialog.getByLabel("Confirmation word").fill("DELETE");
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(row).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Deleted Quarterly value portfolio. The portfolio is retired and its own bars configuration deleted; its published values were retained." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Deleted Quarterly value portfolio. The portfolio is retired and its own bars configuration deleted; its published values were retained. Its signal definition went with it." })).toBeVisible();
   await expect(page.getByRole("row", { name: /Daily momentum portfolio/ })).toBeVisible();
   expect(writes).toEqual([]);
 });
@@ -969,7 +969,8 @@ test("runs a portfolio not yet adopted like any other", async ({ page }) => {
   await row.getByRole("button", { name: "Run now", exact: true }).click();
   await expect(page.getByRole("heading", { name: /Legacy growth portfolio: JobRun/ })).toBeVisible();
   await row.getByText("Legacy growth portfolio", { exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Legacy growth portfolio" })).toBeVisible();
+  // The run's result stays above the detail, so name the detail's heading exactly.
+  await expect(page.getByRole("heading", { name: "Legacy growth portfolio", exact: true })).toBeVisible();
   await expect(page.getByText("It works as before", { exact: false })).toBeVisible();
   const valuation = page.locator("details").filter({ hasText: "Valuation source" });
   await valuation.locator("summary").click();

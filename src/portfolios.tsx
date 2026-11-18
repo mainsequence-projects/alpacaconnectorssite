@@ -44,6 +44,7 @@ import {
   type ApiTransport,
   type PortfolioConfiguration,
   type PortfolioConfigurationDetail,
+  type PortfolioDeleteResponse,
   type PortfolioJobRunAccepted,
   type PortfolioValueObservation,
   type PortfolioRebalanceCadence,
@@ -999,6 +1000,13 @@ function PortfolioDetail({
   );
 }
 
+// What the portfolio delete says about the signal definition it followed (connector issue #38).
+const DEFINITION_DELETE_NOTES: Record<NonNullable<PortfolioDeleteResponse["signal_definition"]>["state"], string> = {
+  deleted: " Its signal definition went with it.",
+  followed: " Its signal definition stays: another portfolio follows it.",
+  failed: " Its signal definition could not be deleted; delete it from Signals.",
+};
+
 export function PortfoliosPage({
   transport,
   section = "portfolios",
@@ -1129,8 +1137,10 @@ export function PortfoliosPage({
     setDeleteError(null);
     try {
       if (deletePortfolioTarget) {
-        await api.delete(`${API_ENDPOINTS.portfolioConfigurations}/${encodeURIComponent(deletePortfolioTarget.uid)}`);
-        setMutation({ state: "success", message: `Deleted ${deletePortfolioTarget.name}. The portfolio is retired and its own bars configuration deleted; its published values were retained.` });
+        const removal = await api.delete<PortfolioDeleteResponse>(`${API_ENDPOINTS.portfolioConfigurations}/${encodeURIComponent(deletePortfolioTarget.uid)}`);
+        const definitionState = removal?.signal_definition?.state;
+        const definitionNote = definitionState ? DEFINITION_DELETE_NOTES[definitionState] ?? "" : "";
+        setMutation({ state: "success", message: `Deleted ${deletePortfolioTarget.name}. The portfolio is retired and its own bars configuration deleted; its published values were retained.${definitionNote}` });
         setDeletePortfolioTarget(null);
         setPortfolioRefreshKey((current) => current + 1);
       } else if (deleteRebalanceTarget) {
@@ -1294,7 +1304,7 @@ export function PortfoliosPage({
         actionLabel="Delete"
         title={deletePortfolioTarget ? "Delete portfolio" : "Delete rebalance configuration"}
         selectionLabel={deletePortfolioTarget?.name ?? deleteRebalanceTarget?.name ?? "configuration"}
-        description={deletePortfolioTarget ? "Delete this portfolio. It is retired, not erased: it stops running, and its published values remain as its record. Its own bars configuration is deleted with it; the signal it follows stays with its signal definition. Only the portfolio's owner can delete it." : "Delete this reusable Rebalance Configuration."}
+        description={deletePortfolioTarget ? "Delete this portfolio. It is retired, not erased: it stops running, and its published values remain as its record. Its own bars configuration is deleted with it, and so is the signal definition it follows once no other portfolio follows it; the signal's weights stay with the retired portfolio. Only the portfolio's owner can delete it." : "Delete this reusable Rebalance Configuration."}
         warning={deletePortfolioTarget ? "An account whose target still holds this portfolio must drop it first." : "Deletion is blocked while a Portfolio Configuration still references this row."}
         confirmationWord="DELETE"
         confirmationValue={deleteConfirmation}

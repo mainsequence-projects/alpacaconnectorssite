@@ -124,10 +124,11 @@ fills, volume participation, market impact, or slippage beyond the configured co
 
 Use **Run now** only after the shared Job image is ready; it works whether or not the portfolio is
 paused. The connector refuses a run while the portfolio's previous run is still pending or running,
-or while its preflight is blocked: a run requires existing, enabled linked configurations and
-weights, plus source bars for the weighted assets and the migrated persistent interpolation
-storage. The portfolio run updates interpolation and calculates the ms-markets portfolio without
-rerunning the raw-bars producer.
+or while its preflight is blocked: a run requires existing, enabled linked configurations,
+published weights, and the migrated persistent interpolation storage. A run first fetches the bars
+its weights need, so it works right after new weights (connector issue #39); if that fetch fails,
+it values with the prices already stored. It then updates interpolation and calculates the
+ms-markets portfolio.
 
 Select a row to load its business-facing detail on demand. The detail shows its account and the
 signal it follows, how many assets the signal's weights cover and when they were first and last
@@ -148,7 +149,9 @@ Alpha and beta are omitted because no benchmark is configured.
 
 **Delete** is the owner's. The connector retires the portfolio rather than erasing it: it stops
 running, and its published values remain as its record, as do the shared Job's past runs. Its own
-bars configuration is deleted with it; the signal it follows stays with its signal definition,
-which the account's owner deletes from **Signals** once no portfolio follows it. An account whose
+bars configuration is deleted with it, and so is the signal definition it follows once no other
+portfolio follows it (connector issue #38); the signal's weights stay with the retired portfolio.
+The success message says whether the definition went, stays because another portfolio follows it,
+or could not be deleted, in which case the owner deletes it from **Signals**. An account whose
 target still holds the portfolio blocks the deletion until the account drops it. Deleting the
 account deletes all of its portfolios ([Accounts](accounts.md#removing-keys-and-deleting-an-account)).
